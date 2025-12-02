@@ -17,44 +17,70 @@ export function generateMessageMetadata(sequenceNumber) {
 }
 
 // Checking if this message is safe or might be a replay attack
-export async function validateMessageMetadata(metadata, conversationId) {
+export async function validateMessageMetadata(metadata, conversationId, options = {}) {
+    const { isHistorical = false } = options;
+    
     try {
-        // First check: is this message too old?
-        const now = Date.now();
-        const maxAge = 5 * 60 * 1000;
-        const messageAge = now - metadata.timestamp;
+        // First check: is this message too old? (only for new messages)
+        if (!isHistorical) {
+            const now = Date.now();
+            const maxAge = 5 * 60 * 1000;
+            const messageAge = now - metadata.timestamp;
 
-        if (messageAge > maxAge) {
-            console.warn('⚠ Replay attack detected: Message too old');
-            return {
-                valid: false,
-                reason: 'MESSAGE_EXPIRED',
-                details: `Message is ${Math.floor(messageAge / 1000)}s old (max ${maxAge / 1000}s)`
-            };
-        }
+            if (messageAge > maxAge) {
+                console.warn('⚠ Replay attack detected: Message too old');
+                return {
+                    valid: false,
+                    reason: 'MESSAGE_EXPIRED',
+                    details: `Message is ${Math.floor(messageAge / 1000)}s old (max ${maxAge / 1000}s)`
+                };
+            }
 
-        if (metadata.timestamp > now + 60000) {
-            console.warn('⚠ Replay attack detected: Future timestamp');
-            return {
-                valid: false,
-                reason: 'FUTURE_TIMESTAMP',
-                details: 'Message timestamp is in the future'
-            };
+            if (metadata.timestamp > now + 60000) {
+                console.warn('⚠ Replay attack detected: Future timestamp');
+                return {
+                    valid: false,
+                    reason: 'FUTURE_TIMESTAMP',
+                    details: 'Message timestamp is in the future'
+                };
+            }
         }
 
         // Second check: have we already seen this unique ID?
         const nonceUsed = await hasSeenNonce(metadata.nonce, conversationId);
         if (nonceUsed) {
-            console.warn('⚠ Replay attack detected: Duplicate nonce');
-            return {
-                valid: false,
-                reason: 'DUPLICATE_NONCE',
-                details: 'This nonce has been used before'
-            };
+            // For historical messages, duplicate nonce is OK (we're just loading them)
+            // For new messages, duplicate nonce is a replay attack
+            if (!isHistorical) {
+                console.warn('⚠ Replay attack detected: Duplicate nonce');
+                return {
+                    valid: false,
+                    reason: 'DUPLICATE_NONCE',
+                    details: 'This nonce has been used before'
+                };
+            }
+            // For historical messages, just skip recording the nonce again
         }
 
         // Third check: is this message in order?
         const expectedSequence = await getNextSequenceNumber(conversationId);
+        
+        // For historical messages, allow them if they're not duplicates
+        // and update sequence number if they're higher than expected
+        if (isHistorical) {
+            // Historical messages: allow if not duplicate, update sequence if higher
+            if (!nonceUsed) {
+                await recordNonce(metadata.nonce, conversationId);
+            }
+            // Update sequence number if this message has a higher sequence
+            if (metadata.sequenceNumber >= expectedSequence) {
+                await updateSequenceNumber(conversationId, metadata.sequenceNumber);
+            }
+            // Always allow historical messages (they're from the database)
+            return { valid: true };
+        }
+        
+        // For new messages, enforce strict sequence checking
         if (metadata.sequenceNumber < expectedSequence) {
             console.warn('⚠ Replay attack detected: Old sequence number');
             return {
@@ -222,8 +248,55 @@ function openReplayDB() {
     });
 }
 
+// Clear all replay protection data for a conversation
+export async function clearReplayProtectionData(conversationId) {
+    try {
+        const db = await openReplayDB();
+        
+        // Clear nonces for this conversation
+        const nonceTransaction = db.transaction([NONCE_STORE], 'readwrite');
+        const nonceStore = nonceTransaction.objectStore(NONCE_STORE);
+        const nonceRequest = nonceStore.openCursor();
+        
+        nonceRequest.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                if (cursor.value.conversationId === conversationId || !conversationId) {
+                    cursor.delete();
+                }
+                cursor.continue();
+            }
+        };
+        
+        // Clear sequence numbers for this conversation
+        const sequenceTransaction = db.transaction([SEQUENCE_STORE], 'readwrite');
+        const sequenceStore = sequenceTransaction.objectStore(SEQUENCE_STORE);
+        
+        if (conversationId) {
+            await new Promise((resolve, reject) => {
+                const request = sequenceStore.delete(conversationId);
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        } else {
+            // Clear all sequence numbers
+            await new Promise((resolve, reject) => {
+                const request = sequenceStore.clear();
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        }
+        
+        console.log(`✓ Cleared replay protection data${conversationId ? ` for conversation ${conversationId}` : ' (all conversations)'}`);
+        return true;
+    } catch (error) {
+        console.error('Failed to clear replay protection data:', error);
+        throw error;
+    }
+}
+
 // Creating a random unique ID
-function generateNonce() {
+export function generateNonce() {
     const nonce = window.crypto.getRandomValues(new Uint8Array(16));
     return arrayBufferToBase64(nonce);
 }

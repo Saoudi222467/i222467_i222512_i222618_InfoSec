@@ -27,19 +27,13 @@ router.post('/initiate', authenticate, async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
 
-        // Not allowing multiple key exchanges at once
-        const existing = await KeyExchange.findOne({
+        // If there's an existing pending exchange, we'll cancel it and start a new one
+        // This allows users to "restart" the process if they get stuck
+        await KeyExchange.deleteMany({
             initiatorId: req.userId,
             responderId: responder._id,
-            status: { $in: ['INITIATED', 'RESPONDED'] },
-            expiresAt: { $gt: new Date() }
+            status: { $in: ['INITIATED', 'RESPONDED'] }
         });
-
-        if (existing) {
-            return res.status(400).json({
-                error: 'Key exchange already in progress'
-            });
-        }
 
         // Saving this key exchange request
         const keyExchange = await KeyExchange.create({
@@ -144,6 +138,23 @@ router.post('/respond', authenticate, async (req, res) => {
 
         console.log(`✓ Key exchange responded: ${req.username}`);
 
+        // Notify the initiator via socket that the responder has responded
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user_${keyExchange.initiatorId}`).emit('key_exchange_response', {
+                keyExchangeId: keyExchange._id,
+                responder: {
+                    userId: req.userId,
+                    username: req.username,
+                    ecdhPublicKey: ecdhPublicKey,
+                    signature: signature,
+                    nonce: nonce,
+                    timestamp: timestamp
+                }
+            });
+            console.log(`✓ Notified initiator ${initiator.username} via socket`);
+        }
+
         res.json({
             message: 'Key exchange responded',
             keyExchangeId: keyExchange._id,
@@ -212,7 +223,14 @@ router.post('/confirm', authenticate, async (req, res) => {
 
         res.json({
             message: 'Key exchange confirmed',
-            status: 'CONFIRMED'
+            status: 'CONFIRMED',
+            responder: {
+                userId: keyExchange.responderId,
+                ecdhPublicKey: keyExchange.responderECDHPublicKey,
+                signature: keyExchange.responderSignature,
+                nonce: keyExchange.responderNonce,
+                timestamp: keyExchange.responderTimestamp
+            }
         });
     } catch (error) {
         console.error('Key exchange confirmation error:', error);

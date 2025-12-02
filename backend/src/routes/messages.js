@@ -43,6 +43,18 @@ router.post('/', authenticate, validateReplayProtection, async (req, res) => {
 
         console.log(`✓ Message stored: ${req.userId} → ${receiverId}`);
 
+        // Notify receiver via socket
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user_${receiverId}`).emit('message_received', {
+                messageId: message._id,
+                senderId: req.userId,
+                receiverId: receiverId,
+                timestamp: message.timestamp
+            });
+            console.log(`✓ Notified receiver ${receiverId} via socket`);
+        }
+
         res.status(201).json({
             message: 'Message sent successfully',
             messageId: message._id
@@ -119,6 +131,52 @@ router.delete('/:messageId', authenticate, async (req, res) => {
     } catch (error) {
         console.error('Message deletion error:', error);
         res.status(500).json({ error: 'Failed to delete message' });
+    }
+});
+
+// Deleting all messages in a conversation (both users can do this)
+router.delete('/conversation/:otherUserId', authenticate, async (req, res) => {
+    try {
+        const { otherUserId } = req.params;
+        const currentUserId = req.userId;
+
+        // Delete all messages between these two users
+        const result = await Message.deleteMany({
+            $or: [
+                { senderId: currentUserId, receiverId: otherUserId },
+                { senderId: otherUserId, receiverId: currentUserId }
+            ]
+        });
+
+        await logSecurityEvent(
+            'MESSAGES_DELETED',
+            req,
+            req.userId,
+            'INFO',
+            {
+                otherUserId,
+                deletedCount: result.deletedCount
+            }
+        );
+
+        console.log(`✓ Deleted ${result.deletedCount} messages between ${currentUserId} and ${otherUserId}`);
+
+        res.json({
+            message: 'Conversation cleared successfully',
+            deletedCount: result.deletedCount
+        });
+    } catch (error) {
+        console.error('Conversation deletion error:', error);
+
+        await logSecurityEvent(
+            'MESSAGES_DELETE_FAILED',
+            req,
+            req.userId,
+            'ERROR',
+            { error: error.message }
+        );
+
+        res.status(500).json({ error: 'Failed to clear conversation' });
     }
 });
 

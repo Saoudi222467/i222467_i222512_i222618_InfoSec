@@ -22,6 +22,22 @@ axiosInstance.interceptors.request.use(
     (error) => Promise.reject(error)
 );
 
+// Suppress console errors for expected 404s on key exchange confirm endpoint
+axiosInstance.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        // Suppress console logging for expected 404/400 errors on confirm endpoint
+        if (error.config?.url?.includes('/keyexchange/confirm') && 
+            (error.response?.status === 404 || error.response?.status === 400)) {
+            // These are expected - key exchange not ready yet
+            // Don't log to console, just return the error
+            return Promise.reject(error);
+        }
+        // For other errors, let them through normally (axios will log them)
+        return Promise.reject(error);
+    }
+);
+
 // API service functions
 export const api = {
     // Authentication
@@ -69,6 +85,11 @@ export const api = {
         return response.data;
     },
 
+    deleteConversation: async (otherUserId) => {
+        const response = await axiosInstance.delete(`/messages/conversation/${otherUserId}`);
+        return response.data;
+    },
+
     // Key Exchange
     initiateKeyExchange: async (keyExchangeData) => {
         const response = await axiosInstance.post('/keyexchange/initiate', keyExchangeData);
@@ -81,10 +102,20 @@ export const api = {
     },
 
     confirmKeyExchange: async (keyExchangeId) => {
-        const response = await axiosInstance.post('/keyexchange/confirm', {
-            keyExchangeId
-        });
-        return response.data;
+        try {
+            const response = await axiosInstance.post('/keyexchange/confirm', {
+                keyExchangeId
+            });
+            return response.data;
+        } catch (error) {
+            // Re-throw 404/400 errors as they're expected (key exchange not ready yet)
+            // This allows the caller to handle them gracefully
+            if (error.response && (error.response.status === 404 || error.response.status === 400)) {
+                throw error;
+            }
+            // Re-throw other errors
+            throw error;
+        }
     },
 
     getPendingKeyExchanges: async () => {

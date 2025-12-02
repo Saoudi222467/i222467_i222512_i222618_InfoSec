@@ -10,14 +10,28 @@ function App() {
 
   // Check if user is already logged in
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    const userId = localStorage.getItem('userId');
-    const username = localStorage.getItem('username');
+    const checkSession = async () => {
+      const token = localStorage.getItem('token');
+      const userId = localStorage.getItem('userId');
+      const username = localStorage.getItem('username');
 
-    if (token && userId && username) {
-      setUser({ token, userId, username });
-      setView('chat');
-    }
+      if (token && userId && username) {
+        // Verify we still have the keys (they might have been cleared)
+        const { hasStoredKeys } = await import('./crypto/keyManagement');
+        const keysExist = await hasStoredKeys(userId);
+
+        if (keysExist) {
+          setUser({ token, userId, username });
+          setView('chat');
+        } else {
+          // Keys missing, force logout
+          console.warn('Session found but keys missing from storage. Logging out.');
+          handleLogout();
+        }
+      }
+    };
+
+    checkSession();
   }, []);
 
   const handleLogin = (userData) => {

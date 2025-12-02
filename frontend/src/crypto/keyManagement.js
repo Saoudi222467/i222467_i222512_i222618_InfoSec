@@ -75,28 +75,110 @@ export async function exportPublicKey(publicKey) {
 }
 
 // Turning text back into a usable public key
-export async function importPublicKey(base64Key, keyType = 'ECDSA') {
+export async function importPublicKey(publicKeyData, keyType = 'ECDSA') {
     try {
-        const binaryKey = base64ToArrayBuffer(base64Key);
+        // If it's already a CryptoKey object, just return it
+        // Check both CryptoKey and window.CryptoKey for compatibility
+        if (publicKeyData && 
+            (publicKeyData instanceof CryptoKey || 
+             (typeof CryptoKey !== 'undefined' && publicKeyData instanceof CryptoKey) ||
+             (publicKeyData.constructor && publicKeyData.constructor.name === 'CryptoKey'))) {
+            return publicKeyData;
+        }
+        
+        // Handle both base64 string and JWK object formats
+        let publicKey;
+        
+        // Check if it's a JWK object (JSON format)
+        if (typeof publicKeyData === 'object' && publicKeyData !== null && !Array.isArray(publicKeyData)) {
+            // Check if it has JWK structure (has 'kty' property)
+            if ('kty' in publicKeyData) {
+                // It's a JWK object
+                const algorithm = keyType === 'ECDSA'
+                    ? { name: 'ECDSA', namedCurve: 'P-256' }
+                    : { name: 'ECDH', namedCurve: 'P-256' };
 
-        const algorithm = keyType === 'ECDSA'
-            ? { name: 'ECDSA', namedCurve: 'P-256' }
-            : { name: 'ECDH', namedCurve: 'P-256' };
+                const usages = keyType === 'ECDSA' ? ['verify'] : [];
 
-        const usages = keyType === 'ECDSA' ? ['verify'] : [];
+                publicKey = await window.crypto.subtle.importKey(
+                    'jwk',
+                    publicKeyData,
+                    algorithm,
+                    true,
+                    usages
+                );
+            } else {
+                // It's an object but not a JWK - might be a stringified JSON
+                const jsonString = typeof publicKeyData === 'string' ? publicKeyData : JSON.stringify(publicKeyData);
+                if (jsonString.trim().startsWith('{')) {
+                    const jwk = JSON.parse(jsonString);
+                    const algorithm = keyType === 'ECDSA'
+                        ? { name: 'ECDSA', namedCurve: 'P-256' }
+                        : { name: 'ECDH', namedCurve: 'P-256' };
 
-        const publicKey = await window.crypto.subtle.importKey(
-            'spki',
-            binaryKey,
-            algorithm,
-            true,
-            usages
-        );
+                    const usages = keyType === 'ECDSA' ? ['verify'] : [];
+
+                    publicKey = await window.crypto.subtle.importKey(
+                        'jwk',
+                        jwk,
+                        algorithm,
+                        true,
+                        usages
+                    );
+                } else {
+                    throw new Error('Invalid public key format: object is not a JWK and not a valid JSON string');
+                }
+            }
+        } else if (typeof publicKeyData === 'string') {
+            // Check if it's a JSON string (JWK format)
+            const trimmed = publicKeyData.trim();
+            if (trimmed.startsWith('{')) {
+                // It's a JWK JSON string
+                const jwk = JSON.parse(trimmed);
+                const algorithm = keyType === 'ECDSA'
+                    ? { name: 'ECDSA', namedCurve: 'P-256' }
+                    : { name: 'ECDH', namedCurve: 'P-256' };
+
+                const usages = keyType === 'ECDSA' ? ['verify'] : [];
+
+                publicKey = await window.crypto.subtle.importKey(
+                    'jwk',
+                    jwk,
+                    algorithm,
+                    true,
+                    usages
+                );
+            } else {
+                // It's a base64 string (SPKI format)
+                const binaryKey = base64ToArrayBuffer(publicKeyData);
+
+                const algorithm = keyType === 'ECDSA'
+                    ? { name: 'ECDSA', namedCurve: 'P-256' }
+                    : { name: 'ECDH', namedCurve: 'P-256' };
+
+                const usages = keyType === 'ECDSA' ? ['verify'] : [];
+
+                publicKey = await window.crypto.subtle.importKey(
+                    'spki',
+                    binaryKey,
+                    algorithm,
+                    true,
+                    usages
+                );
+            }
+        } else {
+            throw new Error(`Invalid public key format: expected string or object, got ${typeof publicKeyData}`);
+        }
 
         return publicKey;
     } catch (error) {
         console.error('Public key import failed:', error);
-        throw new Error('Failed to import public key');
+        console.error('Public key data type:', typeof publicKeyData);
+        console.error('Public key data (first 100 chars):', 
+            typeof publicKeyData === 'string' ? publicKeyData.substring(0, 100) : 
+            publicKeyData instanceof CryptoKey ? 'CryptoKey object' : 
+            JSON.stringify(publicKeyData).substring(0, 100));
+        throw new Error(`Failed to import public key: ${error.message}`);
     }
 }
 
@@ -259,10 +341,33 @@ function arrayBufferToBase64(buffer) {
 }
 
 function base64ToArrayBuffer(base64) {
-    const binary = window.atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
+    if (!base64) {
+        throw new Error('Base64 string is empty or undefined');
     }
-    return bytes.buffer;
+    
+    // Clean the base64 string: remove whitespace, newlines, and URL-safe characters
+    let cleaned = base64.toString().trim();
+    
+    // Remove any whitespace characters
+    cleaned = cleaned.replace(/\s/g, '');
+    
+    // Handle URL-safe base64 (replace - with + and _ with /)
+    cleaned = cleaned.replace(/-/g, '+').replace(/_/g, '/');
+    
+    // Add padding if needed
+    while (cleaned.length % 4) {
+        cleaned += '=';
+    }
+    
+    try {
+        const binary = window.atob(cleaned);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes.buffer;
+    } catch (error) {
+        console.error('Base64 decoding failed. Input:', base64.substring(0, 50) + '...');
+        throw new Error(`Invalid base64 string: ${error.message}`);
+    }
 }

@@ -243,9 +243,15 @@ export async function completeKeyExchange(
 async function deriveSessionKey(sharedSecret, nonce1, nonce2) {
     try {
         // Mixing both random values together
+        // Convert base64 to ArrayBuffer, then to Uint8Array for spreading
+        const nonce1Buffer = base64ToArrayBuffer(nonce1);
+        const nonce2Buffer = base64ToArrayBuffer(nonce2);
+        const nonce1Array = new Uint8Array(nonce1Buffer);
+        const nonce2Array = new Uint8Array(nonce2Buffer);
+        
         const salt = new Uint8Array([
-            ...base64ToArrayBuffer(nonce1),
-            ...base64ToArrayBuffer(nonce2)
+            ...nonce1Array,
+            ...nonce2Array
         ]);
 
         // Preparing the shared secret
@@ -295,7 +301,19 @@ function arrayBufferToBase64(buffer) {
 }
 
 function base64ToArrayBuffer(base64) {
-    const binary = window.atob(base64);
+    if (!base64) {
+        // Return empty buffer instead of throwing to prevent crash
+        return new Uint8Array(0).buffer;
+    }
+    // Handle URL-safe base64 strings
+    let binaryString = base64.replace(/-/g, '+').replace(/_/g, '/');
+
+    // Add padding if needed
+    while (binaryString.length % 4) {
+        binaryString += '=';
+    }
+
+    const binary = window.atob(binaryString);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i);

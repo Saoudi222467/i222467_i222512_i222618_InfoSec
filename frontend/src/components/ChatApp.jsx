@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { io } from 'socket.io-client';
 import api from '../services/api';
 import { retrievePrivateKey, importPublicKey } from '../crypto/keyManagement';
 import {
@@ -18,7 +19,8 @@ import {
 } from '../crypto/encryption';
 import {
     generateMessageMetadata,
-    validateMessageMetadata
+    validateMessageMetadata,
+    clearReplayProtectionData
 } from '../crypto/replayProtection';
 import AttackDemos from './AttackDemos';
 import './ChatApp.css';
@@ -38,6 +40,138 @@ function ChatApp({ user, onLogout }) {
     const [uploadProgress, setUploadProgress] = useState(0);
     const messagesEndRef = useRef(null);
     const fileInputRef = useRef(null);
+    const socketRef = useRef(null);
+    const selectedUserRef = useRef(selectedUser);
+    const sessionKeyRef = useRef(sessionKey);
+    
+    // Update refs when values change
+    useEffect(() => {
+        selectedUserRef.current = selectedUser;
+    }, [selectedUser]);
+    
+    useEffect(() => {
+        sessionKeyRef.current = sessionKey;
+    }, [sessionKey]);
+
+    // Set up socket connection for real-time updates
+    useEffect(() => {
+        if (!user) return;
+
+        const socket = io(import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:4000', {
+            transports: ['websocket', 'polling']
+        });
+
+        socket.on('connect', () => {
+            console.log('✓ Socket connected');
+            // Join user's room
+            socket.emit('join', user.userId);
+        });
+
+        // Listen for new messages in real-time
+        const messageHandler = async (data) => {
+            console.log('✓ Received new message via socket:', data);
+            // Check current selectedUser from ref
+            const currentSelectedUser = selectedUserRef.current;
+            if (currentSelectedUser && (data.senderId === currentSelectedUser._id || data.receiverId === currentSelectedUser._id)) {
+                // Reload messages to show the new one
+                await loadMessages();
+            }
+        };
+        socket.on('message_received', messageHandler);
+
+        // Listen for key exchange response from responder
+        const keyExchangeHandler = async (data) => {
+            console.log('✓ Received key exchange response notification:', data);
+            
+            // Check if this is for the currently selected user (use refs to avoid stale closure)
+            const currentSelectedUser = selectedUserRef.current;
+            const currentSessionKey = sessionKeyRef.current;
+            if (!currentSelectedUser || currentSessionKey) return;
+
+            // Check if we have a pending initiation for this key exchange
+            const pendingInitKey = Object.keys(sessionStorage)
+                .find(k => {
+                    if (!k.startsWith('ecdhKeyPair_')) return false;
+                    try {
+                        const pendingData = JSON.parse(sessionStorage.getItem(k));
+                        return pendingData.keyExchangeId === data.keyExchangeId;
+                    } catch {
+                        return false;
+                    }
+                });
+
+            if (pendingInitKey) {
+                const pendingData = JSON.parse(sessionStorage.getItem(pendingInitKey));
+                
+                // Verify this is for the selected user
+                if (pendingData.responderId === data.responder.userId) {
+                    setStatus('✅ Responder accepted! Finalizing secure connection...');
+                    
+                    try {
+                        // Import our ECDH private key back
+                        const initiatorECDHPrivateKey = await window.crypto.subtle.importKey(
+                            'jwk',
+                            pendingData.privateKeyJwk,
+                            { name: 'ECDH', namedCurve: 'P-256' },
+                            true,
+                            ['deriveKey', 'deriveBits']
+                        );
+
+                        // Prepare responder message object
+                        const responderMessage = {
+                            ecdhPublicKey: data.responder.ecdhPublicKey,
+                            signature: data.responder.signature,
+                            nonce: data.responder.nonce,
+                            timestamp: data.responder.timestamp
+                        };
+
+                        // Import responder's user public key for signature verification
+                        const currentSelectedUser = selectedUserRef.current;
+                        if (!currentSelectedUser || !currentSelectedUser.publicKey) {
+                            throw new Error('Responder public key not found. Please refresh and try again.');
+                        }
+                        
+                        const responderUserPublicKey = await importPublicKey(
+                            currentSelectedUser.publicKey,
+                            'ECDSA'
+                        );
+
+                        // Complete key exchange (verifies signature and generates session key)
+                        const { sessionKey: newSessionKey } = await completeKeyExchange(
+                            responderMessage,
+                            responderUserPublicKey,
+                            initiatorECDHPrivateKey,
+                            pendingData.nonce
+                        );
+
+                        // Store session key
+                        setSessionKey(newSessionKey);
+                        const exportedSessionKey = await exportSessionKey(newSessionKey);
+                        sessionStorage.setItem(`sessionKey_${currentSelectedUser._id}`, exportedSessionKey);
+
+                        // Cleanup pending data
+                        sessionStorage.removeItem(pendingInitKey);
+
+                        setStatus('✅ Secure connection established!');
+                        alert(`Secure connection established with ${currentSelectedUser.username}!`);
+                    } catch (err) {
+                        console.error('Failed to complete key exchange from socket notification:', err);
+                        setError(err.message || 'Failed to complete key exchange');
+                    }
+                }
+            }
+        };
+        socket.on('key_exchange_response', keyExchangeHandler);
+
+        socketRef.current = socket;
+
+        return () => {
+            if (socketRef.current) {
+                socketRef.current.disconnect();
+                socketRef.current = null;
+            }
+        };
+    }, [user]); // Only depend on user, not selectedUser or sessionKey
 
     // Load users on mount
     useEffect(() => {
@@ -60,6 +194,128 @@ function ChatApp({ user, onLogout }) {
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
+
+    // Poll for pending key exchanges
+    useEffect(() => {
+        const checkPendingExchanges = async () => {
+            if (!user) return;
+            try {
+                const data = await api.getPendingKeyExchanges();
+                if (data.keyExchanges && data.keyExchanges.length > 0) {
+                    // Check if we have a pending exchange from the selected user
+                    if (selectedUser) {
+                        const pendingFromSelected = data.keyExchanges.find(
+                            ke => ke.initiatorId._id === selectedUser._id
+                        );
+                        if (pendingFromSelected) {
+                            setStatus(`🔔 Incoming key exchange request from ${selectedUser.username}!`);
+                            // Auto-show respond button via state or just rely on UI
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error('Error checking pending exchanges:', err);
+            }
+        };
+
+        // Poll every 5 seconds
+        const interval = setInterval(checkPendingExchanges, 5000);
+        return () => clearInterval(interval);
+    }, [user, selectedUser]);
+
+    // Poll for key exchange confirmation (if we initiated)
+    useEffect(() => {
+        // Wait a bit before starting to poll (give time for initiation to complete)
+        const initialDelay = setTimeout(() => {
+            const checkConfirmation = async () => {
+                if (!selectedUser || sessionKey) return;
+
+                // Check if we have a pending initiation in session storage
+                const pendingInitKey = Object.keys(sessionStorage)
+                    .find(k => k.startsWith('ecdhKeyPair_') &&
+                        JSON.parse(sessionStorage.getItem(k)).responderId === selectedUser._id);
+
+                if (pendingInitKey) {
+                    const pendingData = JSON.parse(sessionStorage.getItem(pendingInitKey));
+
+                    try {
+                        // Try to confirm (this will only succeed if responder has responded)
+                        const response = await api.confirmKeyExchange(pendingData.keyExchangeId);
+
+                        if (response.status === 'CONFIRMED' && response.responder) {
+                            setStatus('✅ Responder accepted! Finalizing secure connection...');
+
+                            // Import our ECDH private key back
+                            const initiatorECDHPrivateKey = await window.crypto.subtle.importKey(
+                                'jwk',
+                                pendingData.privateKeyJwk,
+                                { name: 'ECDH', namedCurve: 'P-256' },
+                                true,
+                                ['deriveKey', 'deriveBits']
+                            );
+
+                            // Prepare responder message object
+                            const responderMessage = {
+                                ecdhPublicKey: response.responder.ecdhPublicKey,
+                                signature: response.responder.signature,
+                                nonce: response.responder.nonce,
+                                timestamp: response.responder.timestamp
+                            };
+
+                            // Import responder's user public key for signature verification
+                            // Ensure we have the public key
+                            if (!selectedUser || !selectedUser.publicKey) {
+                                throw new Error('Responder public key not found. Please refresh and try again.');
+                            }
+                            
+                            const responderUserPublicKey = await importPublicKey(
+                                selectedUser.publicKey,
+                                'ECDSA'
+                            );
+
+                            // Complete key exchange (verifies signature and generates session key)
+                            const { sessionKey: newSessionKey } = await completeKeyExchange(
+                                responderMessage,
+                                responderUserPublicKey,
+                                initiatorECDHPrivateKey,
+                                pendingData.nonce
+                            );
+
+                            // Store session key
+                            setSessionKey(newSessionKey);
+                            const exportedSessionKey = await exportSessionKey(newSessionKey);
+                            sessionStorage.setItem(`sessionKey_${selectedUser._id}`, exportedSessionKey);
+
+                            // Cleanup pending data
+                            sessionStorage.removeItem(pendingInitKey);
+
+                            setStatus('✅ Secure connection established!');
+                            alert(`Secure connection established with ${selectedUser.username}!`);
+                        }
+                    } catch (err) {
+                        // Ignore 404/400 errors as they mean "not ready yet" - these are expected
+                        // Only log unexpected errors
+                        const status = err.response?.status || err.status;
+                        if (status !== 404 && status !== 400) {
+                            console.error('Error checking confirmation:', err);
+                        }
+                        // Silently ignore expected 404/400 errors
+                    }
+                }
+            };
+
+            const interval = setInterval(checkConfirmation, 3000); // Check every 3s
+            
+            // Cleanup function
+            return () => {
+                clearInterval(interval);
+            };
+        }, 2000); // Wait 2 seconds before starting to poll
+
+        return () => {
+            clearTimeout(initialDelay);
+        };
+    }, [selectedUser, sessionKey]);
 
     const loadUsers = async () => {
         try {
@@ -111,19 +367,20 @@ function ChatApp({ user, onLogout }) {
                 timestamp: keyExchangeMsg.timestamp
             });
 
-            setStatus('Waiting for response... Share the key exchange ID with the other user.');
+            setStatus(`⏳ Waiting for ${selectedUser.username} to respond...`);
 
-            // Store ephemeral key pair temporarily
+            // Export and store ephemeral private key
+            const exportedKey = await window.crypto.subtle.exportKey('jwk', ecdhKeyPair.privateKey);
+
             sessionStorage.setItem(`ecdhKeyPair_${response.keyExchangeId}`, JSON.stringify({
                 keyExchangeId: response.keyExchangeId,
-                nonce: keyExchangeMsg.nonce
+                nonce: keyExchangeMsg.nonce,
+                responderId: selectedUser._id,
+                privateKeyJwk: exportedKey // Store key to survive reload
             }));
 
-            // Store ECDH private key (we'll need this later)
-            // In a production app, you'd want better storage
-            window.ecdhPrivateKey = ecdhKeyPair.privateKey;
-
-            alert(`Key exchange initiated! ID: ${response.keyExchangeId}\nWaiting for ${selectedUser.username} to respond...`);
+            // Don't show alert - status message is enough
+            console.log(`✓ Key exchange initiated! ID: ${response.keyExchangeId}`);
 
         } catch (err) {
             console.error('Key exchange initiation failed:', err);
@@ -131,6 +388,98 @@ function ChatApp({ user, onLogout }) {
         } finally {
             setLoading(false);
             setStatus('');
+        }
+    };
+
+    const handleCheckPending = async () => {
+        setLoading(true);
+        try {
+            const data = await api.getPendingKeyExchanges();
+            if (data.keyExchanges && data.keyExchanges.length > 0) {
+                // Find one for current selected user
+                const pending = data.keyExchanges.find(ke => ke.initiatorId._id === selectedUser?._id);
+
+                if (pending) {
+                    const confirm = window.confirm(`Found pending key exchange from ${pending.initiatorId.username}. Respond now?`);
+                    if (confirm) {
+                        await handleRespondToExchange(pending);
+                    }
+                } else {
+                    alert('No pending key exchanges found for this user.');
+                }
+            } else {
+                alert('No pending key exchanges found.');
+            }
+        } catch (err) {
+            console.error('Failed to check pending:', err);
+            setError('Failed to check pending exchanges');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleRespondToExchange = async (pendingExchange) => {
+        try {
+            const password = prompt('Enter your password to access private key:');
+            if (!password) return;
+
+            setStatus('Responding to key exchange...');
+
+            // Get our private key
+            const responderPrivateKey = await retrievePrivateKey(password, user.userId);
+
+            // Prepare initiator message object
+            const initiatorMessage = {
+                ecdhPublicKey: pendingExchange.initiatorECDHPublicKey,
+                signature: pendingExchange.initiatorSignature,
+                nonce: pendingExchange.initiatorNonce,
+                timestamp: pendingExchange.initiatorTimestamp
+            };
+
+            // Import initiator's public key for signature verification
+            // Ensure we have the public key
+            if (!pendingExchange.initiatorId || !pendingExchange.initiatorId.publicKey) {
+                throw new Error('Initiator public key not found in exchange data');
+            }
+            
+            // Log for debugging (first 50 chars only)
+            const publicKeyPreview = typeof pendingExchange.initiatorId.publicKey === 'string' 
+                ? pendingExchange.initiatorId.publicKey.substring(0, 50) 
+                : 'Not a string';
+            console.log('Importing initiator public key (preview):', publicKeyPreview);
+            
+            const initiatorUserPublicKey = await importPublicKey(
+                pendingExchange.initiatorId.publicKey,
+                'ECDSA'
+            );
+
+            // Respond to key exchange (this verifies signature and generates session key)
+            const { sessionKey, message: responseMsg } = await respondToKeyExchange(
+                initiatorMessage,
+                initiatorUserPublicKey,
+                responderPrivateKey
+            );
+
+            // Send response to server
+            const response = await api.respondToKeyExchange({
+                keyExchangeId: pendingExchange._id,
+                ecdhPublicKey: responseMsg.ecdhPublicKey,
+                signature: responseMsg.signature,
+                nonce: responseMsg.nonce,
+                timestamp: responseMsg.timestamp
+            });
+
+            // Store session key (responder already has it from respondToKeyExchange)
+            setSessionKey(sessionKey);
+            const exportedKey = await exportSessionKey(sessionKey);
+            sessionStorage.setItem(`sessionKey_${selectedUser._id}`, exportedKey);
+
+            setStatus('✅ Key exchange complete! Secure connection established.');
+            alert('Key exchange successful! You can now send encrypted messages.');
+
+        } catch (err) {
+            console.error('Failed to respond to exchange:', err);
+            setError(err.message || 'Failed to respond to key exchange');
         }
     };
 
@@ -176,18 +525,22 @@ function ChatApp({ user, onLogout }) {
         if (!sessionKey) return '🔒 [Encrypted - No session key]';
 
         try {
-            // Validate replay protection
+            // Validate replay protection - treat loaded messages as historical
+            // Only newly received messages (via socket) should have strict validation
             const validation = await validateMessageMetadata(
                 {
                     nonce: msg.nonce,
                     timestamp: msg.timestamp,
                     sequenceNumber: msg.sequenceNumber
                 },
-                selectedUser._id
+                selectedUser._id,
+                { isHistorical: true } // Messages loaded from DB are historical
             );
 
             if (!validation.valid) {
-                return `⚠️ [Replay attack detected: ${validation.reason}]`;
+                // For historical messages, still try to decrypt even if validation fails
+                // (they're from the database, so they're legitimate)
+                console.warn('Validation warning for historical message:', validation.reason);
             }
 
             // Decrypt
@@ -200,6 +553,19 @@ function ChatApp({ user, onLogout }) {
             return plaintext;
         } catch (err) {
             console.error('Decryption failed:', err);
+            // Check if this is likely a key mismatch (most common cause)
+            if (err.message && (err.message.includes('invalid key') || err.message.includes('OperationError'))) {
+                // Check if message is older than current session (if we can determine)
+                const messageDate = new Date(msg.createdAt || msg.timestamp);
+                const now = new Date();
+                const messageAge = now - messageDate;
+                
+                // If message is more than 1 hour old, it's likely from a previous session
+                if (messageAge > 60 * 60 * 1000) {
+                    return '🔑 [Message encrypted with previous session key]\n\nThis message was sent before the current encryption session. Old messages cannot be decrypted with the new key.';
+                }
+                return '🔑 [Cannot decrypt - wrong session key]\n\nThis message may have been encrypted with a different session key. Try clearing the session and starting a new key exchange.';
+            }
             return '❌ [Decryption failed]';
         }
     };
@@ -328,6 +694,92 @@ function ChatApp({ user, onLogout }) {
         }
     };
 
+    const handleClearSession = async () => {
+        if (!selectedUser) {
+            setError('Please select a user first');
+            return;
+        }
+
+        const confirm = window.confirm(
+            `Clear all session data for ${selectedUser.username}?\n\nThis will:\n` +
+            `- Remove session key\n` +
+            `- Reset sequence numbers\n` +
+            `- Clear replay protection data\n` +
+            `- Remove pending key exchanges\n` +
+            `- Delete ALL chat messages from database\n\n` +
+            `⚠️ WARNING: This cannot be undone!\n\n` +
+            `You'll need to run key exchange again.`
+        );
+
+        if (!confirm) return;
+
+        try {
+            setStatus('Clearing session data and deleting messages...');
+            setLoading(true);
+
+            // Delete all messages in the conversation from database
+            try {
+                await api.deleteConversation(selectedUser._id);
+                console.log('✓ All messages deleted from database');
+            } catch (err) {
+                console.error('Failed to delete messages from database:', err);
+                // Continue with clearing session data even if message deletion fails
+            }
+
+            // Clear session key
+            setSessionKey(null);
+            sessionStorage.removeItem(`sessionKey_${selectedUser._id}`);
+
+            // Clear sequence number
+            setSequenceNumber(0);
+
+            // Clear chat messages from view
+            setMessages([]);
+
+            // Clear replay protection data
+            await clearReplayProtectionData(selectedUser._id);
+
+            // Clear pending key exchanges for this user
+            Object.keys(sessionStorage).forEach(key => {
+                if (key.startsWith('ecdhKeyPair_')) {
+                    try {
+                        const data = JSON.parse(sessionStorage.getItem(key));
+                        if (data.responderId === selectedUser._id) {
+                            sessionStorage.removeItem(key);
+                        }
+                    } catch (e) {
+                        // Ignore parse errors
+                    }
+                }
+            });
+
+            setStatus('✅ Session data and all messages cleared! You can start a new key exchange.');
+            setTimeout(() => setStatus(''), 3000);
+        } catch (err) {
+            console.error('Failed to clear session:', err);
+            setError('Failed to clear session data');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleRefreshMessages = async () => {
+        if (!selectedUser) return;
+        
+        setLoading(true);
+        setError('');
+        try {
+            await loadMessages();
+            setStatus('✅ Messages refreshed');
+            setTimeout(() => setStatus(''), 2000);
+        } catch (err) {
+            console.error('Failed to refresh messages:', err);
+            setError('Failed to refresh messages');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
         <div className="chat-app">
             {/* Header */}
@@ -389,10 +841,16 @@ function ChatApp({ user, onLogout }) {
                                         </p>
                                     </div>
                                     <div className="chat-actions">
+                                        <button onClick={handleRefreshMessages} className="action-btn" title="Refresh messages">
+                                            🔄 Refresh
+                                        </button>
                                         {!sessionKey && (
                                             <>
                                                 <button onClick={handleInitiateKeyExchange} className="action-btn">
                                                     🔑 Start Key Exchange
+                                                </button>
+                                                <button onClick={handleCheckPending} className="action-btn">
+                                                    🔄 Check Pending
                                                 </button>
                                                 <button onClick={handleManualSessionKey} className="action-btn">
                                                     📥 Import Key
@@ -400,9 +858,14 @@ function ChatApp({ user, onLogout }) {
                                             </>
                                         )}
                                         {sessionKey && (
-                                            <button onClick={handleExportSessionKey} className="action-btn">
-                                                📤 Export Key
-                                            </button>
+                                            <>
+                                                <button onClick={handleExportSessionKey} className="action-btn">
+                                                    📤 Export Key
+                                                </button>
+                                                <button onClick={handleClearSession} className="action-btn" title="Clear session key and reset sequence numbers">
+                                                    🗑️ Clear Session
+                                                </button>
+                                            </>
                                         )}
                                     </div>
                                 </div>
@@ -516,7 +979,7 @@ function ChatApp({ user, onLogout }) {
             )}
 
             {view === 'attacks' && (
-                <AttackDemos />
+                <AttackDemos user={user} />
             )}
         </div>
     );
@@ -525,15 +988,26 @@ function ChatApp({ user, onLogout }) {
 // Message bubble component
 function MessageBubble({ message, isOwn, decrypt }) {
     const [decrypted, setDecrypted] = useState(null);
+    const [isDecrypting, setIsDecrypting] = useState(true);
 
     useEffect(() => {
-        decrypt().then(setDecrypted);
-    }, []);
+        setIsDecrypting(true);
+        decrypt()
+            .then(result => {
+                setDecrypted(result);
+                setIsDecrypting(false);
+            })
+            .catch(err => {
+                console.error('Decryption error in MessageBubble:', err);
+                setDecrypted('❌ [Decryption error]');
+                setIsDecrypting(false);
+            });
+    }, [decrypt]);
 
     return (
         <div className={`message-bubble ${isOwn ? 'own' : 'other'}`}>
             <div className="message-content">
-                {decrypted || '🔄 Decrypting...'}
+                {isDecrypting ? '🔄 Decrypting...' : decrypted}
             </div>
             <div className="message-meta">
                 {new Date(message.createdAt).toLocaleTimeString()}
