@@ -94,7 +94,10 @@ function AttackDemos({ user }) {
             steps = addStep(steps, setMitmSteps, { type: 'danger', text: '💀 Attacker generates malicious ECDH key pair...' });
             const attackerKeyPair = await generateECDHKeyPair();
             const attackerPublicKey = await exportPublicKey(attackerKeyPair.publicKey);
-            steps = addStep(steps, setMitmSteps, { type: 'danger', text: `💀 Attacker key: ${attackerPublicKey.substring(0, 30)}...` });
+            const attackerKeyPreview = attackerPublicKey && typeof attackerPublicKey === 'string' 
+                ? attackerPublicKey.substring(0, 30) 
+                : 'Generated';
+            steps = addStep(steps, setMitmSteps, { type: 'danger', text: `💀 Attacker key: ${attackerKeyPreview}...` });
             await sleep(800);
 
             // Try to use legitimate signature with attacker's key
@@ -104,7 +107,12 @@ function AttackDemos({ user }) {
             // Get target user's public key for verification
             steps = addStep(steps, setMitmSteps, { type: 'step', text: '🔍 Retrieving target user\'s public key from server...' });
             const targetUserData = await api.getUserByUsername(targetUser.username);
-            const targetPublicKey = await importPublicKey(targetUserData.publicKey, 'ECDSA');
+            
+            if (!targetUserData || !targetUserData.user || !targetUserData.user.publicKey) {
+                throw new Error(`Failed to retrieve public key for user ${targetUser.username}. User may not exist or have no public key.`);
+            }
+            
+            const targetPublicKey = await importPublicKey(targetUserData.user.publicKey, 'ECDSA');
             steps = addStep(steps, setMitmSteps, { type: 'success', text: '✅ Target public key retrieved' });
             await sleep(500);
 
