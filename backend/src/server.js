@@ -26,31 +26,31 @@ const io = new Server(httpServer, {
     }
 });
 
-// Create logs directory if it doesn't exist
+// Making sure we have a folder to save logs
 const logsDir = path.join(__dirname, '../logs');
 if (!fs.existsSync(logsDir)) {
     fs.mkdirSync(logsDir, { recursive: true });
 }
 
-// Security headers
+// Adding some basic security headers
 app.use(helmet({
-    contentSecurityPolicy: false // Disable for development
+    contentSecurityPolicy: false
 }));
 
-// CORS configuration
+// Letting frontend talk to us
 app.use(cors({
     origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     credentials: true
 }));
 
-// Body parsing
-app.use(express.json({ limit: '10mb' })); // Increase limit for file uploads
+// Handling JSON data from requests (up to 10mb for files)
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request logging
+// Logging all requests
 app.use(requestLogger);
 
-// Health check
+// Simple check to see if server is alive
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
@@ -59,7 +59,7 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Routes
+// Connecting our different parts of the app
 app.use('/api/auth', authRoutes);
 app.use('/api/2fa', twoFactorRoutes);
 app.use('/api/messages', messageRoutes);
@@ -67,23 +67,22 @@ app.use('/api/files', fileRoutes);
 app.use('/api/keyexchange', keyExchangeRoutes);
 app.use('/api/logs', logRoutes);
 
-// Socket.io real-time messaging
+// Setting up live communication between users
 io.on('connection', (socket) => {
     console.log(`✓ Socket connected: ${socket.id}`);
 
-    // Join user to their room
+    // Putting user in their own room
     socket.on('join', (userId) => {
         socket.join(`user_${userId}`);
         console.log(`User ${userId} joined their room`);
     });
 
-    // Handle new message event
+    // Sending new message to recipient
     socket.on('new_message', (data) => {
-        // Broadcast to receiver
         io.to(`user_${data.receiverId}`).emit('message_received', data);
     });
 
-    // Handle typing indicator
+    // Showing when someone is typing
     socket.on('typing', (data) => {
         io.to(`user_${data.receiverId}`).emit('user_typing', {
             senderId: data.senderId,
@@ -91,7 +90,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Handle key exchange events
+    // Handling secure key exchange between users
     socket.on('key_exchange_initiated', (data) => {
         io.to(`user_${data.responderId}`).emit('key_exchange_request', data);
     });
@@ -105,10 +104,10 @@ io.on('connection', (socket) => {
     });
 });
 
-// Make io available to routes
+// Sharing socket connection with other parts
 app.set('io', io);
 
-// Error handling middleware
+// Catching any errors that slip through
 app.use((err, req, res, next) => {
     logger.error('Unhandled error:', err);
 
@@ -118,12 +117,12 @@ app.use((err, req, res, next) => {
     });
 });
 
-// 404 handler
+// Handling requests to pages that don't exist
 app.use((req, res) => {
     res.status(404).json({ error: 'Route not found' });
 });
 
-// MongoDB connection
+// Database and server setup
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/secure-chat';
 const PORT = process.env.PORT || 4000;
 
@@ -132,7 +131,7 @@ mongoose.connect(MONGO_URI)
         logger.info('✓ Connected to MongoDB');
         console.log('✓ Connected to MongoDB');
 
-        // Start server with Socket.io support
+        // Get the server up and running
         httpServer.listen(PORT, () => {
             logger.info(`✓ Server listening on port ${PORT}`);
             console.log(`✓ Server running on port ${PORT}`);
@@ -148,7 +147,7 @@ mongoose.connect(MONGO_URI)
         process.exit(1);
     });
 
-// Graceful shutdown
+// Clean shutdown when app closes
 process.on('SIGTERM', () => {
     logger.info('SIGTERM received, shutting down gracefully');
     httpServer.close(() => {

@@ -5,10 +5,7 @@ const User = require('../models/User');
 const { authenticate } = require('../middleware/auth');
 const { logSecurityEvent } = require('../middleware/logging');
 
-/**
- * POST /api/keyexchange/initiate
- * Initiate key exchange with another user
- */
+// Starting a secure key exchange with another user
 router.post('/initiate', authenticate, async (req, res) => {
     try {
         const {
@@ -19,18 +16,18 @@ router.post('/initiate', authenticate, async (req, res) => {
             timestamp
         } = req.body;
 
-        // Validation
+        // Making sure we have all the required security data
         if (!responderUsername || !ecdhPublicKey || !signature || !nonce || !timestamp) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
-        // Find responder
+        // Looking up who they want to exchange keys with
         const responder = await User.findOne({ username: responderUsername });
         if (!responder) {
             return res.status(404).json({ error: 'User not found' });
         }
 
-        // Check for existing active key exchange
+        // Not allowing multiple key exchanges at once
         const existing = await KeyExchange.findOne({
             initiatorId: req.userId,
             responderId: responder._id,
@@ -44,7 +41,7 @@ router.post('/initiate', authenticate, async (req, res) => {
             });
         }
 
-        // Create key exchange record
+        // Saving this key exchange request
         const keyExchange = await KeyExchange.create({
             initiatorId: req.userId,
             responderId: responder._id,
@@ -92,10 +89,7 @@ router.post('/initiate', authenticate, async (req, res) => {
     }
 });
 
-/**
- * POST /api/keyexchange/respond
- * Respond to key exchange request
- */
+// Responding to a key exchange request from another user
 router.post('/respond', authenticate, async (req, res) => {
     try {
         const {
@@ -110,7 +104,7 @@ router.post('/respond', authenticate, async (req, res) => {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
-        // Find key exchange
+        // Finding the key exchange they're responding to
         const keyExchange = await KeyExchange.findOne({
             _id: keyExchangeId,
             responderId: req.userId,
@@ -124,7 +118,7 @@ router.post('/respond', authenticate, async (req, res) => {
             });
         }
 
-        // Update with responder data
+        // Adding their response data
         keyExchange.responderECDHPublicKey = ecdhPublicKey;
         keyExchange.responderSignature = signature;
         keyExchange.responderNonce = nonce;
@@ -133,7 +127,7 @@ router.post('/respond', authenticate, async (req, res) => {
 
         await keyExchange.save();
 
-        // Get initiator info
+        // Getting info about who started this
         const initiator = await User.findById(keyExchange.initiatorId);
 
         await logSecurityEvent(
@@ -178,10 +172,7 @@ router.post('/respond', authenticate, async (req, res) => {
     }
 });
 
-/**
- * POST /api/keyexchange/confirm
- * Confirm key exchange completion
- */
+// Finalizing the key exchange process
 router.post('/confirm', authenticate, async (req, res) => {
     try {
         const { keyExchangeId } = req.body;
@@ -238,10 +229,7 @@ router.post('/confirm', authenticate, async (req, res) => {
     }
 });
 
-/**
- * GET /api/keyexchange/pending
- * Get pending key exchange requests for current user
- */
+// Getting any key exchange requests waiting for this user
 router.get('/pending', authenticate, async (req, res) => {
     try {
         const pending = await KeyExchange.find({

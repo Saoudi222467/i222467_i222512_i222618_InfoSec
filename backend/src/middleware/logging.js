@@ -1,7 +1,7 @@
 const winston = require('winston');
 const SecurityLog = require('../models/SecurityLog');
 
-// Create Winston logger
+// Setting up our logging system
 const logger = winston.createLogger({
     level: 'info',
     format: winston.format.combine(
@@ -20,13 +20,11 @@ const logger = winston.createLogger({
     ]
 });
 
-/**
- * Request logging middleware
- */
+// Keeping track of every request that comes in
 function requestLogger(req, res, next) {
     const startTime = Date.now();
 
-    // Log after response
+    // Waiting for response to finish, then logging it
     res.on('finish', () => {
         const duration = Date.now() - startTime;
         logger.info({
@@ -42,9 +40,7 @@ function requestLogger(req, res, next) {
     next();
 }
 
-/**
- * Security event logger
- */
+// Saving important security stuff to database
 async function logSecurityEvent(eventType, req, userId, severity, details) {
     try {
         await SecurityLog.create({
@@ -56,7 +52,7 @@ async function logSecurityEvent(eventType, req, userId, severity, details) {
             details
         });
 
-        // Also log to Winston for immediate visibility
+        // Also showing it in console based on how serious it is
         const logLevel = severity === 'CRITICAL' || severity === 'ERROR' ? 'error' :
             severity === 'WARNING' ? 'warn' : 'info';
 

@@ -1,14 +1,9 @@
-/**
- * Custom Key Exchange Protocol
- * Implements ECDH + ECDSA signatures + HKDF for authenticated key exchange
- * This is our unique variant to prevent MITM attacks
- */
+// Handling the secure key exchange between users
+// Using digital signatures to prevent attackers from intercepting keys
 
 import { generateECDHKeyPair, exportPublicKey, importPublicKey } from './keyManagement.js';
 
-/**
- * Create digital signature using ECDSA
- */
+// Creating a digital signature to prove this data came from me
 export async function signData(data, privateKey) {
     try {
         const encoder = new TextEncoder();
@@ -30,9 +25,7 @@ export async function signData(data, privateKey) {
     }
 }
 
-/**
- * Verify digital signature using ECDSA
- */
+// Checking if a signature is valid and hasn't been tampered with
 export async function verifySignature(data, signature, publicKey) {
     try {
         const encoder = new TextEncoder();
@@ -56,27 +49,23 @@ export async function verifySignature(data, signature, publicKey) {
     }
 }
 
-/**
- * Initiate key exchange (Step 1)
- * Generate ephemeral ECDH key pair and sign it
- * Returns { publicKey, signature, timestamp, nonce }
- */
+// Starting the key exchange process (Step 1: creating and signing my key)
 export async function initiateKeyExchange(userPrivateKey) {
     try {
-        // Generate ephemeral ECDH key pair
+        // Making a temporary key just for this exchange
         const ecdhKeyPair = await generateECDHKeyPair();
 
-        // Export public key
+        // Making it shareable
         const publicKeyBase64 = await exportPublicKey(ecdhKeyPair.publicKey);
 
-        // Generate nonce and timestamp
+        // Adding some randomness and timestamps for security
         const nonce = generateNonce();
         const timestamp = Date.now();
 
-        // Create data to sign: publicKey + nonce + timestamp
+        // Bundling everything together to sign
         const dataToSign = `${publicKeyBase64}:${nonce}:${timestamp}`;
 
-        // Sign with user's long-term private key (ECDSA)
+        // Signing it with my private key so others know it's really from me
         const signature = await signData(dataToSign, userPrivateKey);
 
         console.log('✓ Key exchange initiated with signed ECDH public key');
@@ -96,24 +85,21 @@ export async function initiateKeyExchange(userPrivateKey) {
     }
 }
 
-/**
- * Respond to key exchange (Step 2)
- * Verify signature, generate own ECDH key, derive shared secret
- */
+// Responding to someone's key exchange request (Step 2: verifying them and sending my key)
 export async function respondToKeyExchange(
     initiatorMessage,
     initiatorUserPublicKey,
     responderPrivateKey
 ) {
     try {
-        // Verify timestamp (reject if older than 5 minutes)
+        // Not accepting really old messages (more than 5 minutes)
         const now = Date.now();
-        const maxAge = 5 * 60 * 1000; // 5 minutes
+        const maxAge = 5 * 60 * 1000;
         if (now - initiatorMessage.timestamp > maxAge) {
             throw new Error('Key exchange message expired');
         }
 
-        // Verify signature
+        // Making sure their signature is valid
         const dataToVerify = `${initiatorMessage.ecdhPublicKey}:${initiatorMessage.nonce}:${initiatorMessage.timestamp}`;
         const initiatorPublicKey = await importPublicKey(initiatorUserPublicKey, 'ECDSA');
 
@@ -129,27 +115,27 @@ export async function respondToKeyExchange(
 
         console.log('✓ Initiator signature verified - no MITM detected');
 
-        // Generate own ephemeral ECDH key pair
+        // Creating my own temporary key for the exchange
         const ecdhKeyPair = await generateECDHKeyPair();
         const publicKeyBase64 = await exportPublicKey(ecdhKeyPair.publicKey);
 
-        // Generate nonce and timestamp
+        // Adding my own randomness
         const nonce = generateNonce();
         const timestamp = Date.now();
 
-        // Create data to sign
+        // Preparing my data to sign
         const dataToSign = `${publicKeyBase64}:${nonce}:${timestamp}`;
 
-        // Sign with responder's long-term private key
+        // Signing with my private key
         const signature = await signData(dataToSign, responderPrivateKey);
 
-        // Import initiator's ECDH public key
+        // Loading their key so we can do the exchange
         const initiatorECDHPublicKey = await importPublicKey(
             initiatorMessage.ecdhPublicKey,
             'ECDH'
         );
 
-        // Derive shared secret using ECDH
+        // Using math to create a shared secret only we two know
         const sharedSecret = await window.crypto.subtle.deriveBits(
             {
                 name: 'ECDH',
@@ -159,7 +145,7 @@ export async function respondToKeyExchange(
             256 // 256 bits
         );
 
-        // Derive session key using HKDF
+        // Turning the shared secret into a usable encryption key
         const sessionKey = await deriveSessionKey(
             sharedSecret,
             initiatorMessage.nonce,
@@ -184,10 +170,7 @@ export async function respondToKeyExchange(
     }
 }
 
-/**
- * Complete key exchange (Step 3)
- * Verify responder's signature and derive shared secret
- */
+// Finishing the key exchange (Step 3: verifying their response and getting the final key)
 export async function completeKeyExchange(
     responderMessage,
     responderUserPublicKey,
@@ -195,14 +178,14 @@ export async function completeKeyExchange(
     initiatorNonce
 ) {
     try {
-        // Verify timestamp
+        // Checking timestamp again
         const now = Date.now();
         const maxAge = 5 * 60 * 1000;
         if (now - responderMessage.timestamp > maxAge) {
             throw new Error('Key exchange message expired');
         }
 
-        // Verify signature
+        // Making sure their signature is legit
         const dataToVerify = `${responderMessage.ecdhPublicKey}:${responderMessage.nonce}:${responderMessage.timestamp}`;
         const responderPublicKey = await importPublicKey(responderUserPublicKey, 'ECDSA');
 
@@ -218,13 +201,13 @@ export async function completeKeyExchange(
 
         console.log('✓ Responder signature verified - no MITM detected');
 
-        // Import responder's ECDH public key
+        // Getting their public key ready
         const responderECDHPublicKey = await importPublicKey(
             responderMessage.ecdhPublicKey,
             'ECDH'
         );
 
-        // Derive shared secret using ECDH
+        // Calculating the same shared secret they did
         const sharedSecret = await window.crypto.subtle.deriveBits(
             {
                 name: 'ECDH',
@@ -234,7 +217,7 @@ export async function completeKeyExchange(
             256
         );
 
-        // Derive session key using HKDF (same as responder)
+        // Creating the same encryption key (using both our random values)
         const sessionKey = await deriveSessionKey(
             sharedSecret,
             initiatorNonce,
@@ -256,19 +239,16 @@ export async function completeKeyExchange(
     }
 }
 
-/**
- * Derive session key from shared secret using HKDF-SHA256
- * This is a simplified HKDF implementation using PBKDF2
- */
+// Turning the shared secret into an actual encryption key
 async function deriveSessionKey(sharedSecret, nonce1, nonce2) {
     try {
-        // Combine nonces as salt
+        // Mixing both random values together
         const salt = new Uint8Array([
             ...base64ToArrayBuffer(nonce1),
             ...base64ToArrayBuffer(nonce2)
         ]);
 
-        // Import shared secret as key material
+        // Preparing the shared secret
         const keyMaterial = await window.crypto.subtle.importKey(
             'raw',
             sharedSecret,
@@ -277,12 +257,12 @@ async function deriveSessionKey(sharedSecret, nonce1, nonce2) {
             ['deriveBits', 'deriveKey']
         );
 
-        // Derive AES-GCM key using PBKDF2 (as HKDF alternative)
+        // Generating the actual key we'll use for messages
         const sessionKey = await window.crypto.subtle.deriveKey(
             {
                 name: 'PBKDF2',
                 salt: salt,
-                iterations: 1000, // Lower iterations for HKDF-like behavior
+                iterations: 1000,
                 hash: 'SHA-256'
             },
             keyMaterial,
@@ -298,15 +278,13 @@ async function deriveSessionKey(sharedSecret, nonce1, nonce2) {
     }
 }
 
-/**
- * Generate cryptographically secure nonce
- */
+// Creating a random unique value for security
 function generateNonce() {
     const nonce = window.crypto.getRandomValues(new Uint8Array(16));
     return arrayBufferToBase64(nonce);
 }
 
-// Utility functions
+// Helper functions
 function arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
     let binary = '';

@@ -1,16 +1,11 @@
-/**
- * Key Management Module
- * Handles generation, storage, and retrieval of cryptographic keys using Web Crypto API
- * Private keys are stored in IndexedDB encrypted with a password-derived key
- */
+// Handling creation and storage of secret keys
+// Keys are kept safe in browser using password protection
 
 const DB_NAME = 'SecureChatDB';
 const KEY_STORE = 'keys';
 const DB_VERSION = 1;
 
-/**
- * Initialize IndexedDB for secure key storage
- */
+// Setting up the browser storage for keys
 export async function initKeyStorage() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -27,18 +22,15 @@ export async function initKeyStorage() {
     });
 }
 
-/**
- * Generate ECC P-256 key pair for user identity
- * Returns { publicKey, privateKey } as CryptoKey objects
- */
+// Creating my main identity keys (used to sign things)
 export async function generateUserKeyPair() {
     try {
         const keyPair = await window.crypto.subtle.generateKey(
             {
                 name: 'ECDSA',
-                namedCurve: 'P-256' // NIST P-256 curve as required
+                namedCurve: 'P-256'
             },
-            true, // extractable
+            true,
             ['sign', 'verify']
         );
 
@@ -50,18 +42,15 @@ export async function generateUserKeyPair() {
     }
 }
 
-/**
- * Generate ephemeral ECDH key pair for key exchange
- * Returns { publicKey, privateKey } as CryptoKey objects
- */
+// Creating temporary keys for exchanging secrets with someone
 export async function generateECDHKeyPair() {
     try {
         const keyPair = await window.crypto.subtle.generateKey(
             {
                 name: 'ECDH',
-                namedCurve: 'P-256' // NIST P-256 curve
+                namedCurve: 'P-256'
             },
-            true, // extractable
+            true,
             ['deriveKey', 'deriveBits']
         );
 
@@ -73,9 +62,7 @@ export async function generateECDHKeyPair() {
     }
 }
 
-/**
- * Export public key to base64 for transmission
- */
+// Converting public key to text so it can be sent to others
 export async function exportPublicKey(publicKey) {
     try {
         const exported = await window.crypto.subtle.exportKey('spki', publicKey);
@@ -87,9 +74,7 @@ export async function exportPublicKey(publicKey) {
     }
 }
 
-/**
- * Import public key from base64
- */
+// Turning text back into a usable public key
 export async function importPublicKey(base64Key, keyType = 'ECDSA') {
     try {
         const binaryKey = base64ToArrayBuffer(base64Key);
@@ -115,10 +100,7 @@ export async function importPublicKey(base64Key, keyType = 'ECDSA') {
     }
 }
 
-/**
- * Derive encryption key from password using PBKDF2
- * Used to encrypt private key before storing in IndexedDB
- */
+// Turning password into an encryption key
 async function deriveKeyFromPassword(password, salt) {
     const encoder = new TextEncoder();
     const passwordKey = await window.crypto.subtle.importKey(
@@ -143,31 +125,29 @@ async function deriveKeyFromPassword(password, salt) {
     );
 }
 
-/**
- * Encrypt and store private key in IndexedDB
- */
+// Safely storing private key with password protection
 export async function storePrivateKey(privateKey, password, userId) {
     try {
         const db = await initKeyStorage();
 
-        // Export private key
+        // Converting key to storable format
         const exported = await window.crypto.subtle.exportKey('pkcs8', privateKey);
 
-        // Generate random salt and IV
+        // Creating random values for encryption
         const salt = window.crypto.getRandomValues(new Uint8Array(16));
         const iv = window.crypto.getRandomValues(new Uint8Array(12));
 
-        // Derive encryption key from password
+        // Using password to create an encryption key
         const encryptionKey = await deriveKeyFromPassword(password, salt);
 
-        // Encrypt private key
+        // Locking the private key with encryption
         const encryptedKey = await window.crypto.subtle.encrypt(
             { name: 'AES-GCM', iv: iv },
             encryptionKey,
             exported
         );
 
-        // Store encrypted key with salt and IV
+        // Saving everything to browser storage
         const transaction = db.transaction([KEY_STORE], 'readwrite');
         const store = transaction.objectStore(KEY_STORE);
 
@@ -192,14 +172,12 @@ export async function storePrivateKey(privateKey, password, userId) {
     }
 }
 
-/**
- * Retrieve and decrypt private key from IndexedDB
- */
+// Getting private key back out (needs correct password)
 export async function retrievePrivateKey(password, userId, keyType = 'ECDSA') {
     try {
         const db = await initKeyStorage();
 
-        // Retrieve encrypted key
+        // Loading from storage
         const transaction = db.transaction([KEY_STORE], 'readonly');
         const store = transaction.objectStore(KEY_STORE);
 
@@ -213,22 +191,22 @@ export async function retrievePrivateKey(password, userId, keyType = 'ECDSA') {
             throw new Error('Private key not found in storage');
         }
 
-        // Convert back to ArrayBuffers
+        // Preparing the data
         const encryptedKey = base64ToArrayBuffer(data.encryptedKey);
         const salt = base64ToArrayBuffer(data.salt);
         const iv = base64ToArrayBuffer(data.iv);
 
-        // Derive decryption key from password
+        // Using password to create decryption key
         const decryptionKey = await deriveKeyFromPassword(password, salt);
 
-        // Decrypt private key
+        // Unlocking the private key
         const decrypted = await window.crypto.subtle.decrypt(
             { name: 'AES-GCM', iv: iv },
             decryptionKey,
             encryptedKey
         );
 
-        // Import private key
+        // Converting back to usable key format
         const algorithm = keyType === 'ECDSA'
             ? { name: 'ECDSA', namedCurve: 'P-256' }
             : { name: 'ECDH', namedCurve: 'P-256' };
@@ -251,9 +229,7 @@ export async function retrievePrivateKey(password, userId, keyType = 'ECDSA') {
     }
 }
 
-/**
- * Check if user has keys stored
- */
+// Checking if this user already has keys saved
 export async function hasStoredKeys(userId) {
     try {
         const db = await initKeyStorage();
@@ -272,7 +248,7 @@ export async function hasStoredKeys(userId) {
     }
 }
 
-// Utility functions
+// Helper functions
 function arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
     let binary = '';

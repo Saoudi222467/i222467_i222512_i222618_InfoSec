@@ -1,12 +1,7 @@
-/**
- * Message and File Encryption Module
- * Implements AES-256-GCM for end-to-end encryption
- * All encryption happens client-side only
- */
+// Handling encryption of messages and files
+// Everything happens in browser, server never sees the real content
 
-/**
- * Generate a random session key for AES-256-GCM encryption
- */
+// Creating a random encryption key for secure messaging
 export async function generateSessionKey() {
     try {
         const key = await window.crypto.subtle.generateKey(
@@ -14,7 +9,7 @@ export async function generateSessionKey() {
                 name: 'AES-GCM',
                 length: 256
             },
-            true, // extractable
+            true,
             ['encrypt', 'decrypt']
         );
 
@@ -25,31 +20,28 @@ export async function generateSessionKey() {
     }
 }
 
-/**
- * Encrypt message using AES-256-GCM
- * Returns { ciphertext, iv, authTag } all in base64
- */
+// Locking a message so only the right person can read it
 export async function encryptMessage(message, sessionKey) {
     try {
-        // Generate random IV (96 bits as recommended for GCM)
+        // Creating a random starting point for encryption
         const iv = window.crypto.getRandomValues(new Uint8Array(12));
 
-        // Encode message
+        // Turning text into data we can encrypt
         const encoder = new TextEncoder();
         const messageData = encoder.encode(message);
 
-        // Encrypt
+        // Doing the actual encryption
         const encrypted = await window.crypto.subtle.encrypt(
             {
                 name: 'AES-GCM',
                 iv: iv,
-                tagLength: 128 // 128-bit authentication tag
+                tagLength: 128
             },
             sessionKey,
             messageData
         );
 
-        // The encrypted result contains both ciphertext and auth tag
+        // Packaging up the encrypted result
         const ciphertext = new Uint8Array(encrypted);
 
         return {
@@ -63,17 +55,14 @@ export async function encryptMessage(message, sessionKey) {
     }
 }
 
-/**
- * Decrypt message using AES-256-GCM
- * Returns plaintext string
- */
+// Unlocking an encrypted message using the secret key
 export async function decryptMessage(ciphertext, iv, sessionKey) {
     try {
-        // Convert from base64
+        // Converting encrypted data from storage format
         const ciphertextBuffer = base64ToArrayBuffer(ciphertext);
         const ivBuffer = base64ToArrayBuffer(iv);
 
-        // Decrypt
+        // Decrypting the message
         const decrypted = await window.crypto.subtle.decrypt(
             {
                 name: 'AES-GCM',
@@ -84,7 +73,7 @@ export async function decryptMessage(ciphertext, iv, sessionKey) {
             ciphertextBuffer
         );
 
-        // Decode to string
+        // Turning decrypted data back into readable text
         const decoder = new TextDecoder();
         const plaintext = decoder.decode(decrypted);
 
@@ -95,16 +84,13 @@ export async function decryptMessage(ciphertext, iv, sessionKey) {
     }
 }
 
-/**
- * Encrypt file data using AES-256-GCM
- * For large files, this encrypts in chunks
- */
+// Encrypting a file so it can be shared securely (handles large files in chunks)
 export async function encryptFile(fileData, sessionKey) {
     try {
         const CHUNK_SIZE = 64 * 1024; // 64KB chunks
         const chunks = [];
 
-        // If file is small, encrypt in one go
+        // Small files can be encrypted all at once
         if (fileData.byteLength <= CHUNK_SIZE) {
             const iv = window.crypto.getRandomValues(new Uint8Array(12));
             const encrypted = await window.crypto.subtle.encrypt(
@@ -128,7 +114,7 @@ export async function encryptFile(fileData, sessionKey) {
             };
         }
 
-        // For larger files, encrypt in chunks
+        // Big files need to be broken into smaller pieces
         for (let offset = 0; offset < fileData.byteLength; offset += CHUNK_SIZE) {
             const chunk = fileData.slice(offset, Math.min(offset + CHUNK_SIZE, fileData.byteLength));
             const iv = window.crypto.getRandomValues(new Uint8Array(12));
@@ -161,18 +147,15 @@ export async function encryptFile(fileData, sessionKey) {
     }
 }
 
-/**
- * Decrypt file chunks using AES-256-GCM
- * Returns ArrayBuffer of decrypted file
- */
+// Decrypting file chunks and putting them back together
 export async function decryptFile(encryptedChunks, sessionKey) {
     try {
         const decryptedChunks = [];
 
-        // Sort chunks by index
+        // Making sure chunks are in the right order
         const sortedChunks = [...encryptedChunks].sort((a, b) => a.index - b.index);
 
-        // Decrypt each chunk
+        // Decrypting each piece
         for (const chunk of sortedChunks) {
             const ciphertextBuffer = base64ToArrayBuffer(chunk.data);
             const ivBuffer = base64ToArrayBuffer(chunk.iv);
@@ -190,7 +173,7 @@ export async function decryptFile(encryptedChunks, sessionKey) {
             decryptedChunks.push(new Uint8Array(decrypted));
         }
 
-        // Combine chunks
+        // Putting all the pieces back together
         const totalLength = decryptedChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
         const result = new Uint8Array(totalLength);
         let offset = 0;
@@ -207,9 +190,7 @@ export async function decryptFile(encryptedChunks, sessionKey) {
     }
 }
 
-/**
- * Export session key to raw format (for key exchange)
- */
+// Converting encryption key to a format that can be shared
 export async function exportSessionKey(sessionKey) {
     try {
         const exported = await window.crypto.subtle.exportKey('raw', sessionKey);
@@ -220,9 +201,7 @@ export async function exportSessionKey(sessionKey) {
     }
 }
 
-/**
- * Import session key from raw format
- */
+// Turning a shared key back into usable format
 export async function importSessionKey(base64Key) {
     try {
         const keyData = base64ToArrayBuffer(base64Key);
@@ -241,7 +220,7 @@ export async function importSessionKey(base64Key) {
     }
 }
 
-// Utility functions
+// Helper functions to convert between formats
 function arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
     let binary = '';

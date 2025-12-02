@@ -3,13 +3,9 @@ const SecurityLog = require('../models/SecurityLog');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-production';
 
-/**
- * Authentication middleware
- * Verifies JWT token and attaches user to request
- */
+// Checking if user has a valid login token
 async function authenticate(req, res, next) {
     try {
-        // Get token from header
         const authHeader = req.headers.authorization;
 
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -26,10 +22,10 @@ async function authenticate(req, res, next) {
 
         const token = authHeader.split(' ')[1];
 
-        // Verify token
+        // Making sure token is valid
         const decoded = jwt.verify(token, JWT_SECRET);
 
-        // Attach user info to request
+        // Remembering who this user is for later
         req.userId = decoded.userId;
         req.username = decoded.username;
 
@@ -47,9 +43,7 @@ async function authenticate(req, res, next) {
     }
 }
 
-/**
- * Generate JWT token
- */
+// Creating a login token for user (lasts 24 hours)
 function generateToken(user) {
     return jwt.sign(
         {
@@ -63,9 +57,7 @@ function generateToken(user) {
     );
 }
 
-/**
- * Helper function to log security events
- */
+// Saving security events to database
 async function logSecurityEvent(event) {
     try {
         await SecurityLog.create(event);

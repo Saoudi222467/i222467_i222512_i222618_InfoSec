@@ -5,23 +5,19 @@ const { authenticate } = require('../middleware/auth');
 const { validateReplayProtection } = require('../middleware/replayProtection');
 const { logSecurityEvent } = require('../middleware/logging');
 
-/**
- * POST /api/messages
- * Store encrypted message
- * Requires authentication and replay protection
- */
+// Saving an encrypted message to database (with security checks)
 router.post('/', authenticate, validateReplayProtection, async (req, res) => {
     try {
         const { receiverId, ciphertext, iv, nonce, sequenceNumber, timestamp } = req.body;
 
-        // Validation
+        // Making sure we have all the pieces
         if (!receiverId || !ciphertext || !iv || !nonce) {
             return res.status(400).json({
                 error: 'Missing required fields'
             });
         }
 
-        // Create message
+        // Storing the encrypted message
         const message = await Message.create({
             senderId: req.userId,
             receiverId,
@@ -32,7 +28,7 @@ router.post('/', authenticate, validateReplayProtection, async (req, res) => {
             timestamp
         });
 
-        // Log message sent
+        // Keeping a record of this message
         await logSecurityEvent(
             'MESSAGE_SENT',
             req,
@@ -66,27 +62,23 @@ router.post('/', authenticate, validateReplayProtection, async (req, res) => {
     }
 });
 
-/**
- * GET /api/messages/conversation/:userId
- * Get messages between current user and specified user
- * Requires authentication
- */
+// Getting all messages between two users
 router.get('/conversation/:otherUserId', authenticate, async (req, res) => {
     try {
         const { otherUserId } = req.params;
         const currentUserId = req.userId;
 
-        // Find all messages between these two users
+        // Grabbing messages from both directions
         const messages = await Message.find({
             $or: [
                 { senderId: currentUserId, receiverId: otherUserId },
                 { senderId: otherUserId, receiverId: currentUserId }
             ]
         })
-            .sort({ timestamp: 1 }) // Chronological order
-            .limit(100); // Limit for performance
+            .sort({ timestamp: 1 })
+            .limit(100);
 
-        // Log message retrieval
+        // Recording that messages were fetched
         await logSecurityEvent(
             'MESSAGE_RECEIVED',
             req,
@@ -105,10 +97,7 @@ router.get('/conversation/:otherUserId', authenticate, async (req, res) => {
     }
 });
 
-/**
- * DELETE /api/messages/:messageId
- * Delete a message (only sender can delete)
- */
+// Deleting a message (only the sender can do this)
 router.delete('/:messageId', authenticate, async (req, res) => {
     try {
         const { messageId } = req.params;

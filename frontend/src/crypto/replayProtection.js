@@ -1,14 +1,10 @@
-/**
- * Replay Attack Protection Module
- * Implements nonce tracking, timestamp validation, and sequence numbering
- */
+// Preventing messages from being replayed by attackers
+// Tracking which messages we've already seen
 
 const NONCE_STORE = 'nonces';
 const SEQUENCE_STORE = 'sequences';
 
-/**
- * Generate unique message metadata for replay protection
- */
+// Creating unique data for each message to prevent replays
 export function generateMessageMetadata(sequenceNumber) {
     const nonce = generateNonce();
     const timestamp = Date.now();
@@ -20,14 +16,12 @@ export function generateMessageMetadata(sequenceNumber) {
     };
 }
 
-/**
- * Validate message metadata to detect replays
- */
+// Checking if this message is safe or might be a replay attack
 export async function validateMessageMetadata(metadata, conversationId) {
     try {
-        // Check 1: Timestamp validation (reject messages older than 5 minutes)
+        // First check: is this message too old?
         const now = Date.now();
-        const maxAge = 5 * 60 * 1000; // 5 minutes
+        const maxAge = 5 * 60 * 1000;
         const messageAge = now - metadata.timestamp;
 
         if (messageAge > maxAge) {
@@ -39,7 +33,7 @@ export async function validateMessageMetadata(metadata, conversationId) {
             };
         }
 
-        if (metadata.timestamp > now + 60000) { // Allow 1 minute clock skew
+        if (metadata.timestamp > now + 60000) {
             console.warn('⚠ Replay attack detected: Future timestamp');
             return {
                 valid: false,
@@ -48,7 +42,7 @@ export async function validateMessageMetadata(metadata, conversationId) {
             };
         }
 
-        // Check 2: Nonce uniqueness (check if we've seen this nonce before)
+        // Second check: have we already seen this unique ID?
         const nonceUsed = await hasSeenNonce(metadata.nonce, conversationId);
         if (nonceUsed) {
             console.warn('⚠ Replay attack detected: Duplicate nonce');
@@ -59,7 +53,7 @@ export async function validateMessageMetadata(metadata, conversationId) {
             };
         }
 
-        // Check 3: Sequence number validation
+        // Third check: is this message in order?
         const expectedSequence = await getNextSequenceNumber(conversationId);
         if (metadata.sequenceNumber < expectedSequence) {
             console.warn('⚠ Replay attack detected: Old sequence number');
@@ -70,7 +64,7 @@ export async function validateMessageMetadata(metadata, conversationId) {
             };
         }
 
-        // All checks passed
+        // Everything looks good, remembering this message
         await recordNonce(metadata.nonce, conversationId);
         await updateSequenceNumber(conversationId, metadata.sequenceNumber);
 
@@ -88,9 +82,7 @@ export async function validateMessageMetadata(metadata, conversationId) {
     }
 }
 
-/**
- * Check if nonce has been seen before
- */
+// Checking if we've already seen this unique message ID
 async function hasSeenNonce(nonce, conversationId) {
     try {
         const db = await openReplayDB();
@@ -110,9 +102,7 @@ async function hasSeenNonce(nonce, conversationId) {
     }
 }
 
-/**
- * Record nonce as used
- */
+// Remembering this message ID so we can detect replays
 async function recordNonce(nonce, conversationId) {
     try {
         const db = await openReplayDB();
@@ -120,7 +110,7 @@ async function recordNonce(nonce, conversationId) {
         const store = transaction.objectStore(NONCE_STORE);
 
         const key = `${conversationId}:${nonce}`;
-        const expiresAt = Date.now() + (60 * 60 * 1000); // Keep for 1 hour
+        const expiresAt = Date.now() + (60 * 60 * 1000);
 
         await new Promise((resolve, reject) => {
             const request = store.put({
@@ -135,7 +125,7 @@ async function recordNonce(nonce, conversationId) {
             request.onerror = () => reject(request.error);
         });
 
-        // Clean up old nonces
+        // Cleaning up old IDs to save space
         await cleanExpiredNonces();
     } catch (error) {
         console.error('Nonce recording failed:', error);
@@ -143,9 +133,7 @@ async function recordNonce(nonce, conversationId) {
     }
 }
 
-/**
- * Get next expected sequence number for conversation
- */
+// Getting the next message number we expect
 async function getNextSequenceNumber(conversationId) {
     try {
         const db = await openReplayDB();
@@ -165,9 +153,7 @@ async function getNextSequenceNumber(conversationId) {
     }
 }
 
-/**
- * Update sequence number for conversation
- */
+// Updating the message counter
 async function updateSequenceNumber(conversationId, sequenceNumber) {
     try {
         const db = await openReplayDB();
@@ -190,9 +176,7 @@ async function updateSequenceNumber(conversationId, sequenceNumber) {
     }
 }
 
-/**
- * Clean up expired nonces (older than 1 hour)
- */
+// Deleting really old message IDs we don't need anymore
 async function cleanExpiredNonces() {
     try {
         const db = await openReplayDB();
@@ -216,9 +200,7 @@ async function cleanExpiredNonces() {
     }
 }
 
-/**
-  * Initialize IndexedDB for replay protection
- */
+// Setting up browser storage for tracking messages
 function openReplayDB() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open('ReplayProtectionDB', 1);
@@ -240,15 +222,13 @@ function openReplayDB() {
     });
 }
 
-/**
- * Generate cryptographically secure nonce
- */
+// Creating a random unique ID
 function generateNonce() {
     const nonce = window.crypto.getRandomValues(new Uint8Array(16));
     return arrayBufferToBase64(nonce);
 }
 
-// Utility functions
+// Helper functions
 function arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
     let binary = '';

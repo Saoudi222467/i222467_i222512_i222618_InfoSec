@@ -1,15 +1,12 @@
 const Message = require('../models/Message');
 const { logSecurityEvent } = require('./logging');
 
-/**
- * Replay protection middleware for messages
- * Checks nonce uniqueness, timestamp validity, and sequence numbers
- */
+// Making sure messages aren't being replayed/reused by attackers
 async function validateReplayProtection(req, res, next) {
     try {
         const { nonce, timestamp, sequenceNumber } = req.body;
 
-        // Check 1: Required fields
+        // First check: making sure we have the basic security data
         if (!nonce || !timestamp || sequenceNumber === undefined) {
             await logSecurityEvent(
                 'REPLAY_ATTACK_DETECTED',
@@ -24,9 +21,9 @@ async function validateReplayProtection(req, res, next) {
             });
         }
 
-        // Check 2: Timestamp validation (reject messages older than 5 minutes)
+        // Second check: not accepting old messages (over 5 minutes old)
         const now = Date.now();
-        const maxAge = 5 * 60 * 1000; // 5 minutes
+        const maxAge = 5 * 60 * 1000;
         const messageAge = now - timestamp;
 
         if (messageAge > maxAge) {
@@ -47,7 +44,7 @@ async function validateReplayProtection(req, res, next) {
             });
         }
 
-        // Allow 1 minute clock skew
+        // Giving some leeway for clock differences (1 minute) but rejecting future messages
         if (timestamp > now + 60000) {
             await logSecurityEvent(
                 'REPLAY_ATTACK_DETECTED',
@@ -62,7 +59,7 @@ async function validateReplayProtection(req, res, next) {
             });
         }
 
-        // Check 3: Nonce uniqueness (check if nonce already exists)
+        // Third check: making sure this exact message hasn't been sent before
         const existingMessage = await Message.findOne({ nonce });
 
         if (existingMessage) {
@@ -83,10 +80,7 @@ async function validateReplayProtection(req, res, next) {
             });
         }
 
-        // Check 4: Sequence number validation (optional - requires tracking per conversation)
-        // This can be enhanced to check sequence numbers per sender-receiver pair
-
-        // All checks passed
+        // Everything looks good, letting it through
         next();
     } catch (error) {
         console.error('Replay protection validation failed:', error);
@@ -106,10 +100,7 @@ async function validateReplayProtection(req, res, next) {
     }
 }
 
-/**
- * Clean up old messages (run periodically)
- * Removes messages older than 30 days
- */
+// Cleaning up old messages periodically (keeps database from getting too big)
 async function cleanupOldMessages() {
     try {
         const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);

@@ -5,15 +5,12 @@ const User = require('../models/User');
 const { generateToken } = require('../middleware/auth');
 const { logSecurityEvent } = require('../middleware/logging');
 
-/**
- * POST /api/auth/register
- * Register a new user with public key
- */
+// Creating a new user account
 router.post('/register', async (req, res) => {
     try {
         const { username, password, publicKey } = req.body;
 
-        // Validation
+        // Making sure we have everything we need
         if (!username || !password || !publicKey) {
             return res.status(400).json({
                 error: 'Username, password, and public key are required'
@@ -32,7 +29,7 @@ router.post('/register', async (req, res) => {
             });
         }
 
-        // Check if user already exists
+        // Not creating duplicate usernames
         const existingUser = await User.findOne({ username });
         if (existingUser) {
             await logSecurityEvent(
@@ -48,18 +45,18 @@ router.post('/register', async (req, res) => {
             });
         }
 
-        // Hash password with bcrypt
+        // Encrypting the password for safe storage
         const saltRounds = 12;
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-        // Create user
+        // Saving the new user to database
         const user = await User.create({
             username,
             password: hashedPassword,
-            publicKey // Store ECC P-256 public key
+            publicKey
         });
 
-        // Log successful registration
+        // Keeping a record of this new account
         await logSecurityEvent(
             'AUTH_REGISTER',
             req,
@@ -90,11 +87,7 @@ router.post('/register', async (req, res) => {
     }
 });
 
-/**
- * POST /api/auth/login
- * Authenticate user and return JWT
- * Supports 2FA
- */
+// Logging a user in (with optional 2FA support)
 router.post('/login', async (req, res) => {
     try {
         const { username, password, twoFactorToken } = req.body;
@@ -105,7 +98,7 @@ router.post('/login', async (req, res) => {
             });
         }
 
-        // Find user
+        // Looking up the user in database
         const user = await User.findOne({ username });
 
         if (!user) {
@@ -122,7 +115,7 @@ router.post('/login', async (req, res) => {
             });
         }
 
-        // Verify password
+        // Checking if password is correct
         const isValidPassword = await bcrypt.compare(password, user.password);
 
         if (!isValidPassword) {
@@ -139,17 +132,17 @@ router.post('/login', async (req, res) => {
             });
         }
 
-        // Check if 2FA is enabled
+        // Handling two-factor authentication if it's turned on
         if (user.twoFactorEnabled) {
             if (!twoFactorToken) {
-                // Password correct, but 2FA token needed
+                // Asking for the 6-digit code from their app
                 return res.status(200).json({
                     requiresTwoFactor: true,
                     message: 'Please enter your 2FA token'
                 });
             }
 
-            // Verify 2FA token
+            // Making sure the 6-digit code is valid
             const speakeasy = require('speakeasy');
             const verified = speakeasy.totp.verify({
                 secret: user.twoFactorSecret,
@@ -181,14 +174,14 @@ router.post('/login', async (req, res) => {
             );
         }
 
-        // Update last login
+        // Remembering when they logged in
         user.lastLogin = new Date();
         await user.save();
 
-        // Generate JWT
+        // Creating a login token for them
         const token = generateToken(user);
 
-        // Log successful login
+        // Recording successful login
         await logSecurityEvent(
             'AUTH_LOGIN_SUCCESS',
             req,
@@ -221,14 +214,10 @@ router.post('/login', async (req, res) => {
     }
 });
 
-/**
- * GET /api/auth/users
- * Get list of all users (for chat contact list)
- * Requires authentication
- */
+// Getting list of all users (for contact list)
 router.get('/users', async (req, res) => {
     try {
-        // Return all users with their public keys
+        // Sending back usernames with their public keys
         const users = await User.find({}, {
             username: 1,
             publicKey: 1,
@@ -242,10 +231,7 @@ router.get('/users', async (req, res) => {
     }
 });
 
-/**
- * GET /api/auth/user/:username
- * Get user by username (for key exchange)
- */
+// Finding a specific user by their username
 router.get('/user/:username', async (req, res) => {
     try {
         const { username } = req.params;
