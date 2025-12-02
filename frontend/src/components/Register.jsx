@@ -7,7 +7,7 @@ import {
 } from '../crypto/keyManagement';
 import './Register.css';
 
-function Register({ onSuccess }) {
+function Register({ onSuccess, onSwitchToLogin }) {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -127,6 +127,13 @@ function Register({ onSuccess }) {
                     <button type="submit" disabled={loading} className="submit-btn">
                         {loading ? 'Registering...' : 'Create Account'}
                     </button>
+
+                    <div className="auth-switch">
+                        Already have an account?{' '}
+                        <button type="button" onClick={onSwitchToLogin} className="switch-btn">
+                            Login
+                        </button>
+                    </div>
                 </form>
 
                 <div className="security-notice">

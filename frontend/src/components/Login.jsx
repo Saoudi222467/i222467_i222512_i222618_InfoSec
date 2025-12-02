@@ -3,7 +3,7 @@ import api from '../services/api';
 import { hasStoredKeys, retrievePrivateKey } from '../crypto/keyManagement';
 import './Login.css';
 
-function Login({ onLogin }) {
+function Login({ onLogin, onSwitchToRegister }) {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [twoFactorToken, setTwoFactorToken] = useState('');
@@ -137,6 +137,13 @@ function Login({ onLogin }) {
                     <button type="submit" disabled={loading} className="submit-btn">
                         {loading ? 'Signing in...' : 'Sign In'}
                     </button>
+
+                    <div className="auth-switch">
+                        Don't have an account?{' '}
+                        <button type="button" onClick={onSwitchToRegister} className="switch-btn">
+                            Register
+                        </button>
+                    </div>
                 </form>
             </div>
         </div>

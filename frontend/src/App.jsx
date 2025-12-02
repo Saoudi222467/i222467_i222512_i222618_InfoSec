@@ -41,27 +41,17 @@ function App() {
   return (
     <div className="app">
       {view === 'login' && (
-        <>
-          <Login onLogin={handleLogin} />
-          <div className="auth-switch">
-            Don't have an account?{' '}
-            <button onClick={() => setView('register')} className="switch-btn">
-              Register
-            </button>
-          </div>
-        </>
+        <Login
+          onLogin={handleLogin}
+          onSwitchToRegister={() => setView('register')}
+        />
       )}
 
       {view === 'register' && (
-        <>
-          <Register onSuccess={handleRegisterSuccess} />
-          <div className="auth-switch">
-            Already have an account?{' '}
-            <button onClick={() => setView('login')} className="switch-btn">
-              Login
-            </button>
-          </div>
-        </>
+        <Register
+          onSuccess={handleRegisterSuccess}
+          onSwitchToLogin={() => setView('login')}
+        />
       )}
 
       {view === 'chat' && user && (

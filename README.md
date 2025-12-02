@@ -15,6 +15,7 @@ This is a comprehensive information security project implementing:
 
 ✅ Client-side only encryption (server never sees plaintext)  
 ✅ Private keys stored encrypted in IndexedDB  
+✅ **Two-Factor Authentication (2FA)** with TOTP (Time-based One-Time Password)  
 ✅ Web Crypto API for all cryptographic operations  
 ✅ Custom authenticated key exchange protocol  
 ✅ Real-time attack detection and logging  
@@ -115,13 +116,24 @@ mongod
 3. **Private key generation happens automatically** (ECC P-256)
 4. Private key is encrypted with your password and stored in IndexedDB
 5. Only public key is sent to server
+6. **(Optional)** Set up Two-Factor Authentication for enhanced security
 
-### 2. Login
+### 2. Two-Factor Authentication (2FA) Setup
+1. After registration or from your profile, click "Enable 2FA"
+2. Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.)
+3. Or manually enter the secret key shown
+4. Enter the 6-digit verification code from your app
+5. 2FA is now enabled for your account
+6. **Important**: Save your backup codes in a secure location
+
+### 3. Login
 1. Enter credentials
-2. Private key is decrypted from IndexedDB using your password
-3. JWT token issued for API authentication
+2. If 2FA is enabled, you'll be prompted for your 6-digit code
+3. Enter the code from your authenticator app
+4. Private key is decrypted from IndexedDB using your password
+5. JWT token issued for API authentication
 
-### 3. Starting a Secure Conversation
+### 4. Starting a Secure Conversation
 
 #### Option A: Automated Key Exchange (Recommended)
 1. Select a contact from the sidebar
@@ -139,14 +151,14 @@ mongod
 3. Paste base64 session key
 4. Start messaging
 
-### 4. Sending Messages
+### 5. Sending Messages
 - Type message in input field
 - Click "Send"
 - Message is encrypted client-side with AES-256-GCM
 - Server stores only ciphertext, IV, nonce, sequence number
 - Recipient decrypts locally
 
-### 5. Viewing Security Logs
+### 6. Viewing Security Logs
 - Click "📊 Logs" in header
 - View authentication attempts
 - See detected replay attacks

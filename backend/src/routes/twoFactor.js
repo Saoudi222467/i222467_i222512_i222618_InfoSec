@@ -211,7 +211,7 @@ router.post('/disable', authenticate, async (req, res) => {
         }
 
         // Verify password (import bcrypt at top if needed)
-        const bcrypt = require('bcrypt');
+        const bcrypt = require('bcryptjs');
         const isValidPassword = await bcrypt.compare(password, user.password);
 
         if (!isValidPassword) {
