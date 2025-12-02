@@ -209,25 +209,198 @@
 
 ---
 
-## 5. Testing Two-Factor Authentication (2FA) {#test-2fa}
+##5. Testing Two-Factor Authentication (2FA) {#test-2fa}
 
 ### What You Need:
 - A phone with an authenticator app (Google Authenticator, Authy, Microsoft Authenticator)
-- Or use a browser extension like "Authenticator" for Chrome
+- Or use a browser extension like "Authenticator" for Chrome/Edge
 
-### Steps to Enable 2FA:
+### Overview:
+Two-Factor Authentication (2FA) is now integrated into the registration flow! When you register a new account, you'll be given the option to enable 2FA immediately. If enabled, you'll need to enter a 6-digit code from your authenticator app every time you log in.
 
-Unfortunately this requires implementation in the chat interface. For now, 2FA setup would need to be triggered from a profile menu. The backend supports it via the `/api/2fa/setup` endpoint.
+---
 
-**To test 2FA manually**:
-1. Use a tool like Postman or curl
-2. Make a POST request to `http://localhost:4000/api/2fa/setup`
-3. Include Authorization header: `Bearer <your_jwt_token>`
-4. The response will include a QR code and secret
+### Test 1: Registering with 2FA Enabled
 
-**For a complete test**:
-- A profile/settings page would need to be added to the frontend
-- This is noted in the "Known Limitations" section of the README
+1. **Start Registration**: Go to http://localhost:5174/ and click "Register"
+2. **Fill in Registration Form**:
+   - Username: `user2fa`
+   - Password: `password123`
+   - Confirm Password: `password123`
+3. **Click "Create Account"**
+4. **Wait for Key Generation**: You'll see status messages about generating keys and storing them securely
+5. **2FA Setup Screen Appears**: After registration succeeds, you should see:
+   - Title: "🔐 Two-Factor Authentication"
+   - Description: "Add an extra layer of security to your account"
+   - Two buttons: "✓ Yes, Enable 2FA" and "Skip for Now"
+
+6. **Click "✓ Yes, Enable 2FA"**
+7. **QR Code Appears**: You'll see:
+   - "Step 1: Scan QR Code"
+   - A QR code image
+   - Instructions to use your authenticator app
+
+8. **Scan QR Code**:
+   - Open Google Authenticator (or Authy/Microsoft Authenticator) on your phone
+   - Tap "+" to add a new account
+   - Choose "Scan QR Code"
+   - Point your camera at the QR code on screen
+   - The app will show "SecureChat (user2fa)" with a 6-digit code
+
+9. **Enter Verification Code**:
+   - Look at the 6-digit code in your authenticator app
+   - Type it into the input field on screen
+   - Click "Verify and Enable"
+   - **Expected**: "2FA enabled successfully! Redirecting to login..."
+   - You'll be redirected to the login page after 2 seconds
+
+### What Just Happened:
+✅ Your account was created with encryption keys  
+✅ A 2FA secret was generated on the server  
+✅ QR code was created containing the secret  
+✅ Your authenticator app stored the secret locally  
+✅ Your verification code proved you have the secret  
+✅ 2FA is now enabled for your account  
+
+---
+
+### Test 2: Login with 2FA Enabled
+
+1. **At Login Page**: Enter your credentials:
+   - Username: `user2fa`
+   - Password: `password123`
+2. **Click "Sign In"**
+3. **2FA Prompt Appears**:
+   - Username and password fields become disabled
+   - New field appears: "2FA Code"
+   - Placeholder shows: "000000"
+   - Instructions: "Enter the 6-digit code from your authenticator app"
+
+4. **Open Authenticator App**: Look at the code for "SecureChat (user2fa)"
+5. **Enter the 6-Digit Code**: Type it into the 2FA Code field
+6. **Click "Sign In"** again
+7. **Expected**: Successfully log in to chat interface ✅
+
+### What Just Happened:
+✅ Server verified your password  
+✅ Server detected you have 2FA enabled  
+✅ Login paused to request 2FA code  
+✅ Server verified the code matches your secret  
+✅ Both factors authenticated - you're now logged in!  
+
+---
+
+### Test 3: Login with Wrong 2FA Code
+
+1. **Logout** and return to login page
+2. **Enter credentials** and click "Sign In"
+3. **When 2FA prompt appears**, enter a WRONG code: `000000`
+4. **Click "Sign In"**
+5. **Expected**: Error message "Invalid 2FA token" ❌
+6. **Try again** with the correct code from your auth app
+7. **Expected**: Successfully log in ✅
+
+---
+
+### Test 4: Registering Without 2FA (Skip Option)
+
+1. **Register a different user**:
+   - Go to registration page
+   - Username: `plainuser`
+   - Password: `password123`
+   - Confirm Password: `password123`
+2. **Click "Create Account"**
+3. **When 2FA setup screen appears**, click "Skip for Now"
+4. **Expected**: Immediately redirected to login page
+
+5. **Login without 2FA**:
+   - Username: `plainuser`
+   - Password: `password123`
+   - Click "Sign In"
+6. **Expected**: Log in directly to chat - NO 2FA prompt! ✅
+
+---
+
+### Test 5: Verify in Database
+
+1. **Open MongoDB Compass**
+2. **Connect to `localhost:27017`**
+3. **Navigate to**: `secure-chat` database → `users` collection
+
+4.**Find user with 2FA**:
+   - Look for username: `user2fa`
+   - Check fields:
+     - `twoFactorEnabled`: should be `true` ✅
+     - `twoFactorSecret`: should contain a base32 string ✅
+
+5. **Find user without 2FA**:
+   - Look for username: `plainuser`
+   - Check fields:
+     - `twoFactorEnabled`: should be `false` ✅
+     - `twoFactorSecret`: should be `null` ✅
+
+6. **Check Security Logs**:
+   - Navigate to `securitylogs` collection
+   - Look for events:
+     - `AUTH_2FA_SETUP` - when QR code was generated
+     - `AUTH_2FA_ENABLED` - when verification succeeded
+     - `AUTH_2FA_LOGIN_SUCCESS` - when user logged in with 2FA
+     - `AUTH_2FA_LOGIN_FAILED` - if wrong code was entered
+
+---
+
+### Understanding the 2FA Flow
+
+**Registration Flow (with 2FA)**:
+``` 
+User Registers → Keys Generated → Account Created
+   ↓
+2FA Setup Screen
+   ↓
+User clicks "Enable 2FA"
+   ↓
+Server generates TOTP secret → Creates QR code
+   ↓
+User scans QR with auth app
+   ↓
+User enters 6-digit verification code
+   ↓
+Server verifies code → Enables 2FA
+   ↓
+Redirect to Login
+```
+
+**Login Flow (with 2FA enabled)**:
+```
+User enters username/password → Server verifies
+   ↓
+Server checks: 2FA enabled?
+   ↓
+YES → Request 2FA code
+   ↓
+User enters code from auth app
+   ↓
+Server verifies TOTP code
+   ↓
+Both factors valid → Grant access
+```
+
+---
+
+### Important Notes:
+
+⚠️ **Losing Access**: If you lose your phone or uninstall your authenticator app, you will NOT be able to login! In a production system, you would need:
+- Backup codes
+- Account recovery system
+- Admin assistance
+
+⚠️ **Time Synchronization**: TOTP codes are time-based (change every 30 seconds). Make sure your phone's time is accurate!
+
+⚠️ **One-Time Setup**: You only scan the QR code ONCE during registration. After that, your authenticator app will generate codes automatically.
+
+✅ **Security Benefit**: Even if someone steals your password, they can't login without your phone!
+
+
 
 ---
 

@@ -110,33 +110,6 @@ mongod
 
 ## 📖 Usage Guide
 
-### 1. Registration
-1. Click "Register" on the home screen
-2. Enter username and password (min 8 characters)
-3. **Private key generation happens automatically** (ECC P-256)
-4. Private key is encrypted with your password and stored in IndexedDB
-5. Only public key is sent to server
-6. **(Optional)** Set up Two-Factor Authentication for enhanced security
-
-### 2. Two-Factor Authentication (2FA) Setup
-1. After registration or from your profile, click "Enable 2FA"
-2. Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.)
-3. Or manually enter the secret key shown
-4. Enter the 6-digit verification code from your app
-5. 2FA is now enabled for your account
-6. **Important**: Save your backup codes in a secure location
-
-### 3. Login
-1. Enter credentials
-2. If 2FA is enabled, you'll be prompted for your 6-digit code
-3. Enter the code from your authenticator app
-4. Private key is decrypted from IndexedDB using your password
-5. JWT token issued for API authentication
-
-### 4. Starting a Secure Conversation
-
-#### Option A: Automated Key Exchange (Recommended)
-1. Select a contact from the sidebar
 2. Click "🔑 Start Key Exchange"
 3. Enter your password to access private key
 4. Protocol executes:
@@ -306,6 +279,7 @@ See [docs/threat-model.md](docs/threat-model.md) for complete analysis.
 3. **Multi-Device**: Private keys don't sync between devices.
 4. **Group Chat**: Not implemented (only 1-to-1 messaging).
 5. **Perfect Forward Secrecy**: Session keys are long-lived. Should implement key rotation.
+6. **2FA Management**: Two-Factor Authentication can only be enabled during registration. No option to enable/disable it later.
 
 ## 📚 Documentation
 

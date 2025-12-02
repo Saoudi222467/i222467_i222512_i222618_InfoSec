@@ -20,6 +20,7 @@ import {
     generateMessageMetadata,
     validateMessageMetadata
 } from '../crypto/replayProtection';
+import AttackDemos from './AttackDemos';
 import './ChatApp.css';
 
 function ChatApp({ user, onLogout }) {
@@ -32,8 +33,11 @@ function ChatApp({ user, onLogout }) {
     const [status, setStatus] = useState('');
     const [sessionKey, setSessionKey] = useState(null);
     const [sequenceNumber, setSequenceNumber] = useState(0);
-    const [view, setView] = useState('chat'); // 'chat', 'logs'
+    const [view, setView] = useState('chat'); // 'chat', 'logs', 'attacks'
+    const [selectedFile, setSelectedFile] = useState(null);
+    const [uploadProgress, setUploadProgress] = useState(0);
     const messagesEndRef = useRef(null);
+    const fileInputRef = useRef(null);
 
     // Load users on mount
     useEffect(() => {
@@ -229,6 +233,101 @@ function ChatApp({ user, onLogout }) {
         }
     };
 
+    const handleFileSelect = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            // 10MB limit
+            if (file.size > 10 * 1024 * 1024) {
+                setError('File too large. Maximum size is 10MB.');
+                return;
+            }
+            setSelectedFile(file);
+            setError('');
+        }
+    };
+
+    const handleFileUpload = async () => {
+        if (!selectedFile || !sessionKey) return;
+
+        setLoading(true);
+        setError('');
+        setUploadProgress(0);
+
+        try {
+            // Read file as ArrayBuffer
+            const fileData = await selectedFile.arrayBuffer();
+
+            // Encrypt file
+            setStatus('Encrypting file...');
+            const encryptedFile = await encryptFile(fileData, sessionKey);
+
+            // Generate replay protection metadata
+            const metadata = generateMessageMetadata(sequenceNumber);
+
+            // Send to server
+            setStatus('Uploading encrypted file...');
+            await api.sendMessage({
+                receiverId: selectedUser._id,
+                type: 'file',
+                fileName: selectedFile.name,
+                fileSize: selectedFile.size,
+                fileType: selectedFile.type,
+                encryptedChunks: encryptedFile.chunks,
+                totalChunks: encryptedFile.totalChunks,
+                nonce: metadata.nonce,
+                sequenceNumber: metadata.sequenceNumber,
+                timestamp: metadata.timestamp
+            });
+
+            setSequenceNumber(prev => prev + 1);
+            setSelectedFile(null);
+            setStatus('File sent successfully!');
+            if (fileInputRef.current) fileInputRef.current.value = '';
+
+            // Reload messages
+            await loadMessages();
+
+        } catch (err) {
+            console.error('Failed to upload file:', err);
+            setError(err.response?.data?.error || 'Failed to upload file');
+        } finally {
+            setLoading(false);
+            setUploadProgress(0);
+            setTimeout(() => setStatus(''), 3000);
+        }
+    };
+
+    const handleFileDownload = async (msg) => {
+        if (!sessionKey) {
+            setError('No session key for decryption');
+            return;
+        }
+
+        try {
+            setStatus('Decrypting file...');
+
+            // Decrypt file chunks
+            const decryptedData = await decryptFile(msg.encryptedChunks, sessionKey);
+
+            // Create blob and download
+            const blob = new Blob([decryptedData], { type: msg.fileType || 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = msg.fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            setStatus('File downloaded successfully!');
+            setTimeout(() => setStatus(''), 3000);
+        } catch (err) {
+            console.error('Failed to download file:', err);
+            setError('Failed to decrypt and download file');
+        }
+    };
+
     return (
         <div className="chat-app">
             {/* Header */}
@@ -240,6 +339,9 @@ function ChatApp({ user, onLogout }) {
                 <div className="header-right">
                     <button onClick={() => setView('chat')} className={view === 'chat' ? 'active' : ''}>
                         💬 Chat
+                    </button>
+                    <button onClick={() => setView('attacks')} className={view === 'attacks' ? 'active' : ''}>
+                        💀 Attack Demos
                     </button>
                     <button onClick={() => setView('logs')} className={view === 'logs' ? 'active' : ''}>
                         📊 Logs
@@ -308,12 +410,21 @@ function ChatApp({ user, onLogout }) {
                                 {/* Messages */}
                                 <div className="messages-container">
                                     {messages.map((msg, idx) => (
-                                        <MessageBubble
-                                            key={msg._id || idx}
-                                            message={msg}
-                                            isOwn={msg.senderId === user.userId}
-                                            decrypt={() => decryptAndDisplayMessage(msg)}
-                                        />
+                                        msg.type === 'file' ? (
+                                            <FileMessageBubble
+                                                key={msg._id || idx}
+                                                message={msg}
+                                                isOwn={msg.senderId === user.userId}
+                                                onDownload={() => handleFileDownload(msg)}
+                                            />
+                                        ) : (
+                                            <MessageBubble
+                                                key={msg._id || idx}
+                                                message={msg}
+                                                isOwn={msg.senderId === user.userId}
+                                                decrypt={() => decryptAndDisplayMessage(msg)}
+                                            />
+                                        )
                                     ))}
                                     <div ref={messagesEndRef} />
                                 </div>
@@ -323,18 +434,64 @@ function ChatApp({ user, onLogout }) {
                                     {error && <div className="error-banner">{error}</div>}
                                     {status && <div className="status-banner">{status}</div>}
 
+                                    {/* File Upload Section */}
+                                    {selectedFile && (
+                                        <div className="file-preview">
+                                            <div className="file-info">
+                                                <span>📎 {selectedFile.name}</span>
+                                                <span className="file-size">({(selectedFile.size / 1024).toFixed(1)} KB)</span>
+                                            </div>
+                                            <div className="file-actions">
+                                                <button
+                                                    type="button"
+                                                    onClick={handleFileUpload}
+                                                    disabled={!sessionKey || loading}
+                                                    className="upload-btn"
+                                                >
+                                                    {loading ? '⏳ Encrypting...' : '📤 Send File'}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setSelectedFile(null);
+                                                        if (fileInputRef.current) fileInputRef.current.value = '';
+                                                    }}
+                                                    className="cancel-btn"
+                                                >
+                                                    ❌ Cancel
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     <div className="input-row">
                                         <input
                                             type="text"
                                             value={newMessage}
                                             onChange={(e) => setNewMessage(e.target.value)}
                                             placeholder={sessionKey ? "Type a message..." : "No session key - set up encryption first"}
-                                            disabled={!sessionKey || loading}
+                                            disabled={!sessionKey || loading || selectedFile}
                                             className="message-input"
                                         />
+                                        <input
+                                            ref={fileInputRef}
+                                            type="file"
+                                            onChange={handleFileSelect}
+                                            style={{ display: 'none' }}
+                                            disabled={!sessionKey || loading}
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => fileInputRef.current?.click()}
+                                            disabled={!sessionKey || loading}
+                                            className="attach-btn"
+                                            title="Attach encrypted file"
+                                        >
+                                            📎
+                                        </button>
                                         <button
                                             type="submit"
-                                            disabled={!sessionKey || !newMessage.trim() || loading}
+                                            disabled={!sessionKey || !newMessage.trim() || loading || selectedFile}
                                             className="send-btn"
                                         >
                                             {loading ? '⏳' : '📤'} Send
@@ -357,6 +514,10 @@ function ChatApp({ user, onLogout }) {
             {view === 'logs' && (
                 <SecurityLogs />
             )}
+
+            {view === 'attacks' && (
+                <AttackDemos />
+            )}
         </div>
     );
 }
@@ -373,6 +534,28 @@ function MessageBubble({ message, isOwn, decrypt }) {
         <div className={`message-bubble ${isOwn ? 'own' : 'other'}`}>
             <div className="message-content">
                 {decrypted || '🔄 Decrypting...'}
+            </div>
+            <div className="message-meta">
+                {new Date(message.createdAt).toLocaleTimeString()}
+            </div>
+        </div>
+    );
+}
+
+// File message bubble component
+function FileMessageBubble({ message, isOwn, onDownload }) {
+    return (
+        <div className={`message-bubble file-bubble ${isOwn ? 'own' : 'other'}`}>
+            <div className="file-message-content">
+                <div className="file-icon">📎</div>
+                <div className="file-details">
+                    <div className="file-name">🔐 {message.fileName}</div>
+                    <div className="file-size">{(message.fileSize / 1024).toFixed(1)} KB · {message.totalChunks} chunk(s)</div>
+                    <div className="file-encrypted">✅ End-to-end encrypted</div>
+                </div>
+                <button onClick={onDownload} className="download-btn" title="Decrypt and download">
+                    ⬇️ Download
+                </button>
             </div>
             <div className="message-meta">
                 {new Date(message.createdAt).toLocaleTimeString()}
