@@ -304,8 +304,9 @@ This project demonstrates:
 Educational project for information security coursework.
 
 ## 👥 Contributors
-
-[Your Names Here]
+Muhammad Usman 22i-2618
+Saoud Ahmed 22i-2467
+Abdullah Ilyas 22i-2512
 
 ---
 
